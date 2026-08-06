@@ -6,7 +6,7 @@ moving, and each *arr queue, for downloads that finished but failed to import. A
 removes is blocklisted at the *arr that owns it, so the same bad release is not picked again on
 the next search.
 
-## Why both halves are needed
+## What it watches
 
 A stalled torrent and a failed import are different failures, visible from different places:
 
