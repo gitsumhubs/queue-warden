@@ -28,47 +28,63 @@ Watching only one end leaves the other class of failure to sit in the queue inde
 - Tests: pytest
 - No database — state is a JSON file
 
-## Prerequisites
+## Quick start
 
-- Python 3.12+ (or Docker)
-- At least one *arr with an API key
-- Optionally a download client (rdt-client, or anything qBittorrent-compatible)
-
-## Setup
-
-```bash
-cd /home/josh/Projects/queue-warden
-pip install -r requirements.txt
-cp config.json.example config.json   # then edit it
-```
-
-`config.json` is gitignored because it holds live API keys. Only `config.json.example` is
-committed.
-
-## Running
-
-Everything you need is the compose file. No source checkout, no config file to write first:
+Everything you need is one compose file — no source checkout, no config to write first:
 
 ```bash
 curl -O https://raw.githubusercontent.com/gitsumhubs/queue-warden/main/docker-compose.yml
 docker compose up -d
 ```
 
-Open <http://localhost:3020> and add your *arrs on the **Settings** page. A starter config is
-written on first run, and everything saved in the UI persists to `./data/config`.
+Open <http://localhost:3020>, go to **Settings**, and add your *arrs. A starter config is written
+on first run, and anything saved in the UI persists to `./data/config`.
 
-Optionally copy `.env.example` to `.env` to change the port, pre-seed API keys, or start in
-dry-run mode.
+> **Start in dry-run.** Set `QUEUE_WARDEN_DRY_RUN=true` for the first day. Queue Warden will
+> report exactly what it *would* remove without touching anything, so you can check its judgement
+> before trusting it.
 
-### From source
+### Connecting to your apps
+
+Inside a container, `localhost` means the container itself. Use:
+
+| Where your app runs | URL to use |
+|---------------------|------------|
+| On the Docker host | `http://host.docker.internal:8989` |
+| In a container on a shared network | `http://sonarr:8989` |
+
+The **Test** button beside each target confirms it immediately.
+
+### Optional environment configuration
+
+Copy `.env.example` to `.env` to change the port, pre-seed API keys, or enable dry-run without
+opening the UI. Every setting is available either way.
+
+## Prerequisites
+
+- Docker with Compose — or Python 3.12+ to run from source
+- At least one *arr with an API key
+- Optionally a download client (rdt-client, or anything qBittorrent-compatible)
+
+## Running from source
 
 ```bash
+git clone https://github.com/gitsumhubs/queue-warden.git
+cd queue-warden
 pip install -r requirements.txt
 python main.py
 ```
 
+To build the container from source instead of pulling the published image:
+
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+Run the tests with:
+
+```bash
+pip install pytest && python -m pytest tests/ -q
 ```
 
 ## Features

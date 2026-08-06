@@ -64,12 +64,14 @@ from the target's `name`, upper-cased with hyphens as underscores.
 ## Setup Instructions
 
 ```bash
-cd /home/josh/Projects/queue-warden
+git clone https://github.com/gitsumhubs/queue-warden.git
+cd queue-warden
 pip install -r requirements.txt
-cp config.json.example config.json
-# edit config.json with real urls and api keys
 python main.py
 ```
+
+A starter `config.json` is written on first run; configure targets at `/settings` or copy
+`config.json.example` and edit it directly.
 
 ### Docker (published image)
 
@@ -102,8 +104,8 @@ Description=Queue Warden
 After=network.target
 
 [Service]
-WorkingDirectory=/home/josh/Projects/queue-warden
-ExecStart=/usr/bin/python3 /home/josh/Projects/queue-warden/main.py
+WorkingDirectory=/opt/queue-warden
+ExecStart=/usr/bin/python3 /opt/queue-warden/main.py
 Restart=always
 
 [Install]
