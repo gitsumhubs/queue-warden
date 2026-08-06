@@ -1,0 +1,18 @@
+# Live config holds real API keys and passwords; ship config.json.example instead
+config.json
+
+# Runtime data
+state/
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+.pytest_cache/
+
+# Environment
+.env
+*.env.local

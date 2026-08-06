@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Queue Warden</title>
+  <style>
+    :root {
+      --bg: #16181d; --card: #1e2128; --line: #2c3039;
+      --text: #e6e8ec; --muted: #8b929e; --accent: #6366f1;
+      --warn: #f59e0b; --bad: #ef4444; --good: #10b981;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 1.5rem; background: var(--bg); color: var(--text);
+           font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    h1 { margin: 0 0 .25rem; font-size: 1.5rem; font-weight: 600; }
+    h2 { margin: 2rem 0 .75rem; font-size: 1rem; font-weight: 600; color: var(--muted);
+         text-transform: uppercase; letter-spacing: .05em; }
+    .sub { color: var(--muted); margin-bottom: 1.5rem; }
+    .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 1rem; }
+    .stat { font-size: 1.75rem; font-weight: 600; }
+    .stat-label { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; color: var(--muted); font-size: .75rem; text-transform: uppercase;
+         letter-spacing: .04em; padding: .5rem .75rem; border-bottom: 1px solid var(--line); }
+    td { padding: .5rem .75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    .wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+    .tag { display: inline-block; padding: .1rem .45rem; border-radius: 4px; font-size: .7rem;
+           font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+    .tag-stalled { background: rgba(245,158,11,.15); color: var(--warn); }
+    .tag-failed_import { background: rgba(99,102,241,.15); color: #a5b4fc; }
+    .tag-dry { background: rgba(139,146,158,.15); color: var(--muted); }
+    .title { color: var(--text); word-break: break-word; }
+    .reason { color: var(--muted); font-size: .85rem; }
+    .actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    button { background: var(--accent); color: #fff; border: none; border-radius: 6px;
+             padding: .5rem 1rem; font-size: .875rem; font-weight: 500; cursor: pointer; }
+    button.secondary { background: transparent; border: 1px solid var(--line); color: var(--text); }
+    button:hover { filter: brightness(1.1); }
+    .banner { background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.35);
+              border-radius: 8px; padding: .875rem 1rem; margin-bottom: 1rem; }
+    .empty { padding: 1.5rem; text-align: center; color: var(--muted); }
+    form { display: inline; }
+  </style>
+</head>
+<body>
+  <h1>Queue Warden</h1>
+  <div class="sub">
+    Watching {{ targets|join(', ') if targets else 'no targets' }}
+    {%- if config.cleanup.dry_run %} &middot; <span class="tag tag-dry">dry run</span>{% endif %}
+  </div>
+
+  {% if metrics.last_error %}
+  <div class="banner">
+    <strong>Last error</strong> &mdash; {{ metrics.last_error.message }}
+    <div class="reason">{{ metrics.last_error.timestamp[:19]|replace('T', ' ') }}</div>
+    <form action="/clear-error" method="post" style="margin-top:.6rem">
+      <button class="secondary" type="submit">Clear</button>
+    </form>
+  </div>
+  {% endif %}
+
+  <div class="actions">
+    <form action="/run" method="post"><button type="submit">Run now</button></form>
+    <form action="/run" method="post">
+      <input type="hidden" name="dry_run" value="1">
+      <button class="secondary" type="submit">Dry run</button>
+    </form>
+    <form action="/run" method="post">
+      <input type="hidden" name="force_stuck" value="1">
+      <button class="secondary" type="submit">Run &amp; force stuck</button>
+    </form>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="stat">{{ metrics.total_deleted }}</div>
+      <div class="stat-label">Removed all-time</div>
+    </div>
+    <div class="card">
+      <div class="stat">{{ metrics.by_detector.get('stalled', 0) }}</div>
+      <div class="stat-label">Stalled downloads</div>
+    </div>
+    <div class="card">
+      <div class="stat">{{ metrics.by_detector.get('failed_import', 0) }}</div>
+      <div class="stat-label">Failed imports</div>
+    </div>
+    <div class="card">
+      <div class="stat">{{ metrics.total_runs }}</div>
+      <div class="stat-label">Runs</div>
+    </div>
+  </div>
+
+  {% if metrics.by_target %}
+  <h2>By target</h2>
+  <div class="grid">
+    {% for name, count in metrics.by_target.items() %}
+    <div class="card">
+      <div class="stat">{{ count }}</div>
+      <div class="stat-label">{{ name }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <h2>Recent runs</h2>
+  <div class="wrap">
+    <table>
+      <thead>
+        <tr><th>When</th><th>Removed</th><th>Errors</th><th>Took</th></tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+        <tr>
+          <td>{{ run.timestamp[:19]|replace('T', ' ') }}
+            {%- if run.dry_run %} <span class="tag tag-dry">dry</span>{% endif %}</td>
+          <td>{{ run.deleted }}</td>
+          <td>{{ run.errors|length }}</td>
+          <td class="reason">{{ run.duration_seconds }}s</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty">No runs yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Removed items</h2>
+  <div class="wrap">
+    <table>
+      <thead>
+        <tr><th>When</th><th>Detector</th><th>Item</th><th>Reason</th><th>Target</th></tr>
+      </thead>
+      <tbody>
+        {% for item in history %}
+        <tr>
+          <td class="reason">{{ item.timestamp[:19]|replace('T', ' ') }}</td>
+          <td><span class="tag tag-{{ item.detector }}">{{ item.detector|replace('_', ' ') }}</span></td>
+          <td class="title">{{ item.title }}</td>
+          <td class="reason">{{ item.reason }}</td>
+          <td class="reason">{{ item.target or '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">Nothing removed yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>

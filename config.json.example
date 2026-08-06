@@ -1,0 +1,74 @@
+{
+  "targets": [
+    {
+      "name": "Sonarr",
+      "flavour": "arr",
+      "url": "http://sonarr:8989",
+      "api_key": "",
+      "enabled": true
+    },
+    {
+      "name": "Radarr",
+      "flavour": "arr",
+      "url": "http://radarr:7878",
+      "api_key": "",
+      "enabled": true
+    },
+    {
+      "name": "Bookmarkarr",
+      "flavour": "bookmarkarr",
+      "url": "http://bookmarkarr:5000",
+      "api_key": "",
+      "enabled": false
+    }
+  ],
+  "download_client": {
+    "type": "rdtclient",
+    "url": "http://rdt-client:6500",
+    "username": "",
+    "password": "",
+    "enabled": true
+  },
+  "detectors": {
+    "stalled": {
+      "enabled": true,
+      "states": [
+        "stalleddl",
+        "stalledup",
+        "error",
+        "missingfiles"
+      ],
+      "stuck_min_age_minutes": 10,
+      "stuck_min_streak": 2,
+      "finished_threshold_minutes": 60
+    },
+    "failed_import": {
+      "enabled": true,
+      "states": [
+        "importblocked",
+        "failed",
+        "downloadfailed"
+      ]
+    }
+  },
+  "cleanup": {
+    "interval_minutes": 5,
+    "blocklist": true,
+    "dry_run": false
+  },
+  "webui": {
+    "host": "0.0.0.0",
+    "port": 3020
+  },
+  "notifications": {
+    "discord_webhook": "",
+    "slack_webhook": "",
+    "notify_threshold": 5,
+    "notify_on_error": true
+  },
+  "state": {
+    "prune_days": 7,
+    "max_history": 200,
+    "max_runs": 100
+  }
+}

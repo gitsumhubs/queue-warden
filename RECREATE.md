@@ -1,0 +1,169 @@
+# Queue Warden
+
+## Overview
+
+Queue Warden is a cleanup daemon for a Sonarr/Radarr/Bookmarkarr stack. It removes downloads that
+have gone wrong and blocklists the release at the *arr that owns it, so the next search picks
+something different instead of the same failing item.
+
+It watches two independent failure modes from the only place each is visible. A stalled transfer
+can only be seen at the download client, because the *arr still reports it as downloading. A
+failed import can only be seen in the *arr queue, because the torrent itself looks healthy.
+Watching one end alone leaves the other class stuck indefinitely, which is why the project merges
+two earlier single-purpose daemons (`rdt-cleanup` for stalls, `arr-cleanup` for failed imports)
+rather than replacing one with the other.
+
+Targets are configuration, not code. Adding an *arr is a config entry; the only thing that varies
+between them is route shape, which is isolated in `warden/clients.py`. That is deliberate — the
+predecessors hardcoded `sonarr` and `radarr`, which is why Bookmarkarr went uncovered for as long
+as it did.
+
+## Tech Stack
+
+- Language/Framework: Python 3.12, Flask
+- Database: none — state is a JSON file written atomically via a temp file
+- Key Dependencies: flask, requests, pytest
+
+## Prerequisites
+
+- Python 3.12+, or Docker with Compose
+- At least one *arr reachable with an API key
+- Optionally a qBittorrent-compatible download client (rdt-client)
+
+## Environment Variables
+
+All are optional; each overrides the matching `config.json` value. Target variables are derived
+from the target's `name`, upper-cased with hyphens as underscores.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| CONFIG_PATH | No | config.json | Path to the config file |
+| STATE_PATH | No | state/state.json | Path to persisted state |
+| LOG_LEVEL | No | INFO | Python log level |
+| SONARR_URL | No | - | Overrides the Sonarr target url |
+| SONARR_API_KEY | No | - | Overrides the Sonarr target api key |
+| RADARR_URL | No | - | Overrides the Radarr target url |
+| RADARR_API_KEY | No | - | Overrides the Radarr target api key |
+| BOOKMARKARR_URL | No | - | Overrides the Bookmarkarr target url |
+| BOOKMARKARR_API_KEY | No | - | Overrides the Bookmarkarr target api key |
+| DOWNLOAD_CLIENT_URL | No | - | Download client base url |
+| DOWNLOAD_CLIENT_USERNAME | No | - | Download client username |
+| DOWNLOAD_CLIENT_PASSWORD | No | - | Download client password |
+| CLEANUP_INTERVAL_MINUTES | No | 5 | Minutes between passes |
+| DRY_RUN | No | false | Report only, remove nothing |
+| WEBUI_HOST | No | 0.0.0.0 | Web UI bind address |
+| WEBUI_PORT | No | 3020 | Web UI port |
+| DISCORD_WEBHOOK | No | - | Discord notification webhook |
+| SLACK_WEBHOOK | No | - | Slack notification webhook |
+
+## Port Configuration
+
+- Port: 3020
+- Registered in portctl as: queue-warden
+
+## Setup Instructions
+
+```bash
+cd /home/josh/Projects/queue-warden
+pip install -r requirements.txt
+cp config.json.example config.json
+# edit config.json with real urls and api keys
+python main.py
+```
+
+### Docker
+
+```bash
+mkdir -p config
+cp config.json.example config/config.json
+# edit config/config.json
+docker compose up -d --build
+```
+
+### systemd
+
+```ini
+[Unit]
+Description=Queue Warden
+After=network.target
+
+[Service]
+WorkingDirectory=/home/josh/Projects/queue-warden
+ExecStart=/usr/bin/python3 /home/josh/Projects/queue-warden/main.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## Directory Structure
+
+| Path | Purpose |
+|------|---------|
+| `main.py` | Entrypoint: scheduler thread plus Flask in the foreground |
+| `warden/config.py` | Defaults, file load, env overrides, target validation |
+| `warden/clients.py` | `RdtClient`, `ArrTarget`, `BookmarkarrTarget` |
+| `warden/detectors.py` | Stall detection and failed-import detection |
+| `warden/cleanup.py` | Orchestration: gather victims, claim, remove |
+| `warden/state.py` | Persisted stall streaks, run history, lifetime metrics |
+| `warden/web.py` | Flask app, JSON API, `Runtime` shared handle |
+| `warden/notify.py` | Discord/Slack webhooks |
+| `templates/index.html` | Dashboard |
+| `tests/` | pytest suite |
+
+## Configuration Files
+
+`config.json` holds live API keys and is gitignored; `config.json.example` is the committed
+template. This split is deliberate — the predecessor tracked its live config, which meant a
+routine `git add -A` would have published real credentials to a public repository.
+
+## Running the Project
+
+```bash
+python main.py                                   # dev
+docker compose up -d --build                     # prod
+docker run --rm -v "$PWD":/work -w /work python:3.12-slim \
+  bash -lc 'pip install -q -r requirements.txt pytest && python -m pytest tests/ -q'
+```
+
+## Design Notes
+
+`Runtime.run_once` is serialised behind a lock. Two overlapping passes would both see the same
+victims, and the second would report failures for items the first had already removed.
+
+A torrent can trip both detectors at once — stalled at the client *and* failed in the queue.
+Victims are de-duplicated by hash before removal, otherwise the metrics double-count and the log
+shows a cleanup that never happened.
+
+Stall detection requires a streak of consecutive zero-speed checks plus a minimum age, never a
+single reading. Torrents idle briefly between pieces all the time, and acting on one sample would
+kill healthy downloads on thin swarms.
+
+Completed torrents sitting at 0 B/s are seeding, not stuck, and are explicitly excluded.
+
+Bookmarkarr reports `blocklisted` in its response body separately from the HTTP status. A torrent
+client answers a delete for an unknown hash with success, so status alone cannot tell the caller
+whether the release was actually recognised. Queue Warden keys off that flag, and treats a `false`
+as "not claimed" so the item falls through to direct client removal rather than being recorded as
+a successful blocklist.
+
+State is written to a temp file and renamed, so an interrupted write cannot leave a half-parsed
+file that the next start would discard. A corrupt state file is discarded with a warning rather
+than being fatal: it costs stall streaks and history, not correctness.
+
+## Troubleshooting
+
+**Nothing is ever removed.** Check `/api/status` for `targets` — an empty list means no target had
+both a url and an api key. Unconfigured targets are skipped silently by design.
+
+**Bookmarkarr items are removed but never blocklisted.** Bookmarkarr must be 0.1.17 or newer;
+earlier versions ignore the `blocklist` query parameter.
+
+**Healthy downloads are being removed.** Raise `stuck_min_age_minutes` and `stuck_min_streak`.
+Slow swarms can sit at 0 B/s for long stretches while still being alive.
+
+**Web UI returns 500 with `TemplateNotFound`.** The templates directory must sit beside `main.py`.
+It is resolved absolutely from the package location, so this only happens if the tree is split up.
+
+**Run history is empty after a restart.** `STATE_PATH` is not persisted. Under Docker, mount
+`./state:/app/state`.
