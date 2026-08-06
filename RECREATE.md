@@ -48,7 +48,7 @@ from the target's `name`, upper-cased with hyphens as underscores.
 | DOWNLOAD_CLIENT_USERNAME | No | - | Download client username |
 | DOWNLOAD_CLIENT_PASSWORD | No | - | Download client password |
 | CLEANUP_INTERVAL_MINUTES | No | 5 | Minutes between passes |
-| DRY_RUN | No | false | Report only, remove nothing |
+| DRY_RUN | No | true | Report only, remove nothing. `QUEUE_WARDEN_DRY_RUN` is accepted too |
 | WEBUI_HOST | No | 0.0.0.0 | Web UI bind address |
 | WEBUI_PORT | No | 3020 | Web UI port |
 | DISCORD_WEBHOOK | No | - | Discord notification webhook |
@@ -141,6 +141,24 @@ docker run --rm -v "$PWD":/work -w /work python:3.12-slim \
 ```
 
 ## Design Notes
+
+Dry run defaults to on. A first run happens before anyone has reviewed what this daemon considers
+removable, and the alternative is a service that starts deleting and blocklisting the moment
+credentials are filled in. An existing config file keeps whatever it already says, so this only
+affects fresh installs.
+
+Both `DRY_RUN` and `QUEUE_WARDEN_DRY_RUN` are read. The compose file maps the prefixed name down
+to the bare one, but anyone writing their own compose sets the prefixed name directly in
+`environment:` — silently ignoring it would hand them a live daemon when they explicitly asked for
+a dry run.
+
+Supplying a URL and API key for a target through the environment also enables that target.
+Without it, a target shipped disabled by default can never be switched on by environment alone,
+and an env-only deployment silently drops it.
+
+The starter config is written *after* environment overrides are applied, so the file on disk
+reflects what is actually running. Persisting bare defaults first made a configured daemon look
+unconfigured, which is a confusing thing to debug.
 
 `Runtime.run_once` is serialised behind a lock. Two overlapping passes would both see the same
 victims, and the second would report failures for items the first had already removed.

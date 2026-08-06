@@ -63,8 +63,12 @@ docker compose up -d
 Then open <http://localhost:3020> and add your *arrs on the **Settings** page. A starter config is
 written on first run; anything saved in the UI persists to `./data/config`.
 
-Set `QUEUE_WARDEN_DRY_RUN=true` for the first day to see what it would remove without removing
-anything.
+**Dry run is on by default.** Queue Warden reports what it *would* remove and removes nothing
+until you turn it off, either on the Settings page or with `QUEUE_WARDEN_DRY_RUN=false`. Give it a
+day, check the run history agrees with your judgement, then switch it off.
+
+Both `QUEUE_WARDEN_DRY_RUN` and `DRY_RUN` are accepted, so it works whether you set it in `.env`
+alongside the compose file above or directly in a compose `environment:` block of your own.
 
 Inside a container `localhost` means the container itself — use `http://host.docker.internal:8989`
 for apps on the Docker host, or `http://sonarr:8989` for apps on a shared Docker network.
@@ -130,7 +134,9 @@ pip install pytest && python -m pytest tests/ -q
 | `notifications.*` | Discord/Slack webhooks and threshold |
 
 Every value can be overridden by environment variable. Targets are addressed by name:
-`SONARR_API_KEY`, `BOOKMARKARR_URL`, and so on. See RECREATE.md for the full list.
+`SONARR_API_KEY`, `BOOKMARKARR_URL`, and so on. Supplying both a URL and an API key for a target
+through the environment also enables it, so a target that ships disabled (Bookmarkarr) does not
+need a config file edit as well. See RECREATE.md for the full list.
 
 ## Tech Stack
 

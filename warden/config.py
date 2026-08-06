@@ -47,7 +47,11 @@ DEFAULT_CONFIG = {
     "cleanup": {
         "interval_minutes": 5,
         "blocklist": True,
-        "dry_run": False,
+        # Safe by default. A first run happens before anyone has reviewed what this daemon
+        # considers removable, and the alternative is a service that starts deleting and
+        # blocklisting the moment credentials are filled in. The dashboard badges dry-run
+        # prominently, and an existing config file keeps whatever it already says.
+        "dry_run": True,
     },
     "webui": {"host": "0.0.0.0", "port": 3020},
     "notifications": {
@@ -94,8 +98,17 @@ def _apply_env(config):
     """
     for target in config["targets"]:
         prefix = target["name"].upper().replace("-", "_")
-        target["url"] = _env(f"{prefix}_URL", target.get("url", ""))
-        target["api_key"] = _env(f"{prefix}_API_KEY", target.get("api_key", ""))
+        url = _env(f"{prefix}_URL", target.get("url", ""))
+        api_key = _env(f"{prefix}_API_KEY", target.get("api_key", ""))
+
+        # Configuring a target through the environment is a request to use it. Without this,
+        # a target shipped disabled by default (Bookmarkarr) can never be switched on by env
+        # alone, and an env-only deployment silently drops it.
+        if (os.getenv(f"{prefix}_URL") or os.getenv(f"{prefix}_API_KEY")) and url and api_key:
+            target["enabled"] = True
+
+        target["url"] = url
+        target["api_key"] = api_key
 
     client = config["download_client"]
     client["url"] = _env("DOWNLOAD_CLIENT_URL", client.get("url", ""))
@@ -105,8 +118,13 @@ def _apply_env(config):
     cleanup = config["cleanup"]
     if os.getenv("CLEANUP_INTERVAL_MINUTES"):
         cleanup["interval_minutes"] = int(os.environ["CLEANUP_INTERVAL_MINUTES"])
-    if os.getenv("DRY_RUN"):
-        cleanup["dry_run"] = os.environ["DRY_RUN"].lower() in ("1", "true", "yes")
+    # Both spellings are accepted. The compose file maps QUEUE_WARDEN_DRY_RUN (a .env-level
+    # name, prefixed to avoid colliding with other services) down to DRY_RUN, but anyone
+    # writing their own compose sets the prefixed name directly in `environment:` — and
+    # silently ignoring it hands them a live daemon when they asked for a dry run.
+    dry_run = _env("DRY_RUN", None) or _env("QUEUE_WARDEN_DRY_RUN", None)
+    if dry_run is not None:
+        cleanup["dry_run"] = str(dry_run).lower() in ("1", "true", "yes")
 
     webui = config["webui"]
     webui["host"] = _env("WEBUI_HOST", webui["host"])
@@ -182,14 +200,7 @@ def usable_targets(config):
 def load_config(path="config.json"):
     """Loads config, applies defaults and environment overrides, and drops unusable targets."""
     raw = {}
-    if not os.path.exists(path):
-        # First run: write the defaults out so `docker compose up` needs no prior setup and
-        # the Settings page has a real file to save back to.
-        try:
-            save_config(DEFAULT_CONFIG, path)
-            log.info("Wrote starter config to %s — configure targets at /settings", path)
-        except OSError as error:
-            log.warning("Could not create %s: %s", path, error)
+    is_first_run = not os.path.exists(path)
 
     if os.path.exists(path):
         try:
@@ -200,6 +211,16 @@ def load_config(path="config.json"):
             raise SystemExit(f"Invalid config at {path}: {error}") from error
 
     config = _apply_env(_merge(DEFAULT_CONFIG, raw))
+
+    if is_first_run:
+        # Written *after* environment overrides so the file on disk reflects what is actually
+        # running. Persisting bare defaults first made a configured daemon look unconfigured,
+        # which is a confusing thing to debug.
+        try:
+            save_config(config, path)
+            log.info("Wrote starter config to %s — review targets at /settings", path)
+        except OSError as error:
+            log.warning("Could not create %s: %s", path, error)
 
     for target in config["targets"]:
         if target.get("enabled", True) and target.get("flavour") not in FLAVOURS:
