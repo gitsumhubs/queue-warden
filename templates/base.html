@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Queue Warden{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #16181d; --card: #1e2128; --line: #2c3039;
+      --text: #e6e8ec; --muted: #8b929e; --accent: #6366f1;
+      --warn: #f59e0b; --bad: #ef4444; --good: #10b981;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0 1.5rem 3rem; background: var(--bg); color: var(--text);
+           font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    nav { display: flex; gap: 1.25rem; align-items: center; padding: 1rem 0 1.25rem;
+          border-bottom: 1px solid var(--line); margin-bottom: 1.5rem; }
+    nav .brand { font-weight: 600; margin-right: .5rem; }
+    nav a { color: var(--muted); text-decoration: none; padding: .25rem 0; }
+    nav a:hover { color: var(--text); }
+    nav a.active { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+    nav .spacer { flex: 1; }
+    h1 { margin: 0 0 .25rem; font-size: 1.5rem; font-weight: 600; }
+    h2 { margin: 2rem 0 .75rem; font-size: 1rem; font-weight: 600; color: var(--muted);
+         text-transform: uppercase; letter-spacing: .05em; }
+    .sub { color: var(--muted); margin-bottom: 1.5rem; }
+    .hint { color: var(--muted); font-size: .82rem; margin: .25rem 0 .75rem; }
+    .reason { color: var(--muted); font-size: .85rem; }
+    .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+    .row { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+            padding: 1rem; margin-bottom: 1rem; }
+    .stat { font-size: 1.75rem; font-weight: 600; }
+    .stat-label { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; color: var(--muted); font-size: .75rem; text-transform: uppercase;
+         letter-spacing: .04em; padding: .5rem .75rem; border-bottom: 1px solid var(--line); }
+    td { padding: .5rem .75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    .wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+    .tag { display: inline-block; padding: .1rem .45rem; border-radius: 4px; font-size: .7rem;
+           font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+    .tag-stalled { background: rgba(245,158,11,.15); color: var(--warn); }
+    .tag-failed_import { background: rgba(99,102,241,.15); color: #a5b4fc; }
+    .tag-dry { background: rgba(139,146,158,.15); color: var(--muted); }
+    .title { color: var(--text); word-break: break-word; }
+    .actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+    button { background: var(--accent); color: #fff; border: none; border-radius: 6px;
+             padding: .5rem 1rem; font-size: .875rem; font-weight: 500; cursor: pointer; }
+    button.secondary { background: transparent; border: 1px solid var(--line); color: var(--text); }
+    button:hover { filter: brightness(1.1); }
+    .btn-link { color: var(--muted); text-decoration: none; padding: .5rem .75rem; font-size: .875rem; }
+    .banner { background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.35);
+              border-radius: 8px; padding: .875rem 1rem; margin-bottom: 1rem; }
+    .banner.good { background: rgba(16,185,129,.12); border-color: rgba(16,185,129,.35); }
+    .hidden { display: none; }
+    .empty { padding: 1.5rem; text-align: center; color: var(--muted); }
+    form { display: inline; }
+    .field { margin-bottom: .75rem; }
+    .field label { display: block; color: var(--muted); font-size: .8rem; margin-bottom: .25rem; }
+    input[type=text], input[type=password], input[type=number], input:not([type]) {
+      width: 100%; background: #14161a; color: var(--text); border: 1px solid var(--line);
+      border-radius: 6px; padding: .5rem .625rem; font: inherit; }
+    input:focus, select:focus { outline: none; border-color: var(--accent); }
+    .check { display: flex; align-items: center; gap: .5rem; margin: .5rem 0; cursor: pointer; }
+    .check input { width: auto; }
+  </style>
+</head>
+<body>
+  <nav>
+    <span class="brand">Queue Warden</span>
+    <a href="/" class="{{ 'active' if request.path == '/' }}">Dashboard</a>
+    <a href="/logs" class="{{ 'active' if request.path == '/logs' }}">Logs</a>
+    <a href="/settings" class="{{ 'active' if request.path == '/settings' }}">Settings</a>
+    <span class="spacer"></span>
+    {% if config and config.cleanup.dry_run %}<span class="tag tag-dry">dry run</span>{% endif %}
+  </nav>
+  {% block content %}{% endblock %}
+</body>
+</html>

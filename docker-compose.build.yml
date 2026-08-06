@@ -1,0 +1,7 @@
+---
+# Development override: builds from source instead of pulling the published image.
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+services:
+  queue-warden:
+    build: .
+    image: queue-warden:local

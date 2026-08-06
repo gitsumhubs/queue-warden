@@ -71,14 +71,28 @@ cp config.json.example config.json
 python main.py
 ```
 
-### Docker
+### Docker (published image)
 
 ```bash
-mkdir -p config
-cp config.json.example config/config.json
-# edit config/config.json
-docker compose up -d --build
+curl -O https://raw.githubusercontent.com/gitsumhubs/queue-warden/main/docker-compose.yml
+docker compose up -d
 ```
+
+The compose file pulls `ghcr.io/gitsumhubs/queue-warden:latest` and needs no source checkout
+and no pre-written config: a starter `config.json` is created on first run and everything else
+is set on the Settings page. `QUEUE_WARDEN_IMAGE` overrides the image for local testing.
+
+### Docker (from source)
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+### Publishing
+
+Pushing a `vX.Y.Z` tag triggers `.github/workflows/publish-ghcr.yml`, which builds
+linux/amd64 and linux/arm64 and pushes to GHCR. `.github/workflows/test.yml` runs pytest on
+every push and pull request.
 
 ### systemd
 
@@ -166,4 +180,13 @@ Slow swarms can sit at 0 B/s for long stretches while still being alive.
 It is resolved absolutely from the package location, so this only happens if the tree is split up.
 
 **Run history is empty after a restart.** `STATE_PATH` is not persisted. Under Docker, mount
-`./state:/app/state`.
+`./data/state:/app/state`.
+
+**Targets configured in the file are ignored under Docker.** An environment variable that is
+present but empty used to override the file, and compose passes every variable through with an
+empty default (`SONARR_URL=${SONARR_URL:-}`). Only non-empty environment values count as
+overrides now; if this reappears, check `_env()` in `warden/config.py`.
+
+**Targets cannot be reached from inside the container.** `localhost` means the container. Use
+`host.docker.internal` for services on the Docker host, or the container name for services on a
+shared Docker network. The Test button on the Settings page confirms it immediately.

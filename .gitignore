@@ -1,7 +1,8 @@
 # Live config holds real API keys and passwords; ship config.json.example instead
 config.json
 
-# Runtime data
+# Runtime data — config here holds real API keys
+data/
 state/
 logs/
 *.log

@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Logs — Queue Warden{% endblock %}
+{% block content %}
+
+<h1>Logs</h1>
+<div class="sub">Live tail of the last 1000 lines, held in memory.</div>
+
+<div class="actions">
+  <label class="check"><input id="follow" type="checkbox" checked> Follow</label>
+  <select id="level" onchange="reset()">
+    <option value="">All levels</option>
+    <option value="INFO">Info</option>
+    <option value="WARNING">Warning</option>
+    <option value="ERROR">Error</option>
+  </select>
+  <button class="secondary" type="button" onclick="clearLogs()">Clear</button>
+</div>
+
+<div id="log" class="logbox"><div class="empty">Loading…</div></div>
+
+<style>
+  .logbox {
+    background: #101216; border: 1px solid var(--line); border-radius: 8px;
+    padding: .75rem; height: 65vh; overflow-y: auto;
+    font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .line { display: flex; gap: .75rem; padding: .1rem 0; white-space: pre-wrap; word-break: break-word; }
+  .line .ts { color: #5f6672; flex-shrink: 0; }
+  .line .lvl { flex-shrink: 0; width: 4.5rem; font-weight: 600; }
+  .lvl-INFO { color: #6b7280; }
+  .lvl-WARNING { color: var(--warn); }
+  .lvl-ERROR, .lvl-CRITICAL { color: var(--bad); }
+  .lvl-DEBUG { color: #4b5563; }
+  select { background: var(--card); color: var(--text); border: 1px solid var(--line);
+           border-radius: 6px; padding: .45rem .6rem; font-size: .875rem; }
+</style>
+
+<script>
+let lastId = null;
+
+function render(entries, append) {
+  const box = document.getElementById('log');
+  if (!append) box.innerHTML = '';
+  if (!append && entries.length === 0) {
+    box.innerHTML = '<div class="empty">No log lines yet</div>';
+    return;
+  }
+
+  // Whether we were already at the bottom decides if we auto-scroll, so reading back
+  // through history is not yanked away every time a new line lands.
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+
+  for (const entry of entries) {
+    const line = document.createElement('div');
+    line.className = 'line';
+    line.innerHTML =
+      `<span class="ts">${entry.timestamp.slice(11, 19)}</span>` +
+      `<span class="lvl lvl-${entry.level}">${entry.level}</span>` +
+      `<span>${entry.message.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</span>`;
+    box.appendChild(line);
+    lastId = entry.id;
+  }
+
+  if (document.getElementById('follow').checked && atBottom) {
+    box.scrollTop = box.scrollHeight;
+  }
+}
+
+async function poll() {
+  const level = document.getElementById('level').value;
+  const params = new URLSearchParams();
+  if (level) params.set('level', level);
+  if (lastId !== null) params.set('after', lastId);
+
+  try {
+    const response = await fetch('/api/logs?' + params.toString());
+    const body = await response.json();
+    if (body.logs.length) render(body.logs, lastId !== null);
+  } catch (error) {
+    // A failed poll is not worth surfacing; the next tick will catch up.
+  }
+}
+
+function reset() {
+  lastId = null;
+  document.getElementById('log').innerHTML = '<div class="empty">Loading…</div>';
+  poll();
+}
+
+async function clearLogs() {
+  await fetch('/api/logs/clear', { method: 'POST' });
+  reset();
+}
+
+reset();
+setInterval(poll, 2000);
+</script>
+{% endblock %}

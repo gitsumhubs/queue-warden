@@ -47,18 +47,29 @@ committed.
 
 ## Running
 
-```bash
-python main.py                       # foreground
-```
-
-Or with Docker:
+Everything you need is the compose file. No source checkout, no config file to write first:
 
 ```bash
-mkdir -p config && cp config.json.example config/config.json
-docker compose up -d --build
+curl -O https://raw.githubusercontent.com/gitsumhubs/queue-warden/main/docker-compose.yml
+docker compose up -d
 ```
 
-The web UI is on <http://localhost:3020>.
+Open <http://localhost:3020> and add your *arrs on the **Settings** page. A starter config is
+written on first run, and everything saved in the UI persists to `./data/config`.
+
+Optionally copy `.env.example` to `.env` to change the port, pre-seed API keys, or start in
+dry-run mode.
+
+### From source
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
 
 ## Features
 

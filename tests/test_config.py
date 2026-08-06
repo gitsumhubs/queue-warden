@@ -80,6 +80,35 @@ def test_environment_overrides_target_by_name(tmp_path, monkeypatch):
     assert config["targets"][0]["api_key"] == "from-env"
 
 
+def test_empty_environment_variables_do_not_wipe_config(tmp_path, monkeypatch):
+    # Compose files pass every variable through with an empty default, which makes them
+    # present but blank. Treating that as an override silently erased configured targets.
+    path = write(tmp_path, {
+        "targets": [{"name": "Sonarr", "flavour": "arr", "url": "http://s:8989", "api_key": "real-key"}],
+        "download_client": {"url": "http://rdt:6500", "username": "u", "password": "p"},
+    })
+    monkeypatch.setenv("SONARR_URL", "")
+    monkeypatch.setenv("SONARR_API_KEY", "")
+    monkeypatch.setenv("DOWNLOAD_CLIENT_URL", "")
+
+    config = config_module.load_config(path)
+
+    assert config["targets"][0]["url"] == "http://s:8989"
+    assert config["targets"][0]["api_key"] == "real-key"
+    assert config["download_client"]["url"] == "http://rdt:6500"
+
+
+def test_missing_config_file_is_created_with_defaults(tmp_path):
+    # `docker compose up` with no prior setup must still leave a file the Settings page
+    # can save back to.
+    path = str(tmp_path / "nested" / "config.json")
+
+    config_module.load_config(path)
+
+    import os
+    assert os.path.exists(path)
+
+
 def test_download_client_without_url_is_disabled(tmp_path):
     path = write(tmp_path, {"download_client": {"url": "", "username": "u", "password": "p"}})
 

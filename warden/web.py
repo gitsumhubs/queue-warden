@@ -12,7 +12,14 @@ import threading
 
 from flask import Flask, jsonify, redirect, render_template, request
 
-from . import cleanup as cleanup_module, notify, state as state_module
+from . import (
+    cleanup as cleanup_module,
+    clients as clients_module,
+    config as config_module,
+    logbuffer,
+    notify,
+    state as state_module,
+)
 
 log = logging.getLogger("warden")
 
@@ -81,6 +88,67 @@ def create_app(runtime):
         threading.Thread(target=runtime.run_once, kwargs={"force_stuck": force, "dry_run": dry}, daemon=True).start()
         return redirect("/")
 
+    @app.route("/settings")
+    def settings():
+        return render_template(
+            "settings.html",
+            config=runtime.config,
+            targets=runtime.config.get("all_targets", runtime.config["targets"]),
+            flavours=config_module.FLAVOURS,
+            saved=request.args.get("saved") == "1",
+        )
+
+    @app.route("/api/config", methods=["GET"])
+    def get_config():
+        config = {key: value for key, value in runtime.config.items() if key != "all_targets"}
+        config["targets"] = runtime.config.get("all_targets", runtime.config["targets"])
+        return jsonify(config)
+
+    @app.route("/api/config", methods=["POST"])
+    def save_config():
+        payload = request.get_json(silent=True)
+        if payload is None:
+            return jsonify(success=False, errors=["Request body was not valid JSON"]), 400
+
+        config, errors = config_module.normalise(payload)
+        if errors:
+            # Rejected wholesale rather than partially applied: a half-saved config is
+            # harder to reason about than an unchanged one.
+            return jsonify(success=False, errors=errors), 400
+
+        try:
+            runtime.apply_config(config)
+        except OSError as error:
+            return jsonify(success=False, errors=[f"Could not write config: {error}"]), 500
+
+        return jsonify(success=True, message="Settings saved", targets=[t.name for t in runtime.clients["targets"]])
+
+    @app.route("/logs")
+    def logs_page():
+        return render_template("logs.html", config=runtime.config)
+
+    @app.route("/api/logs")
+    def api_logs():
+        handler = logbuffer.get_handler()
+        if handler is None:
+            return jsonify(logs=[])
+
+        after = request.args.get("after", type=int)
+        return jsonify(
+            logs=handler.tail(
+                limit=request.args.get("limit", default=300, type=int),
+                after_id=after,
+                level=request.args.get("level"),
+            )
+        )
+
+    @app.route("/api/logs/clear", methods=["POST"])
+    def clear_logs():
+        handler = logbuffer.get_handler()
+        if handler is not None:
+            handler.clear()
+        return jsonify(success=True)
+
     @app.route("/clear-error", methods=["POST"])
     def clear_error():
         state_module.clear_error(runtime.state)
@@ -93,13 +161,46 @@ def create_app(runtime):
 class Runtime:
     """Shared handle so the scheduler and the web UI act on the same state."""
 
-    def __init__(self, config, clients, state, state_path, scheduler):
+    def __init__(self, config, clients, state, state_path, scheduler, config_path="config.json"):
         self.config = config
         self.clients = clients
         self.state = state
         self.state_path = state_path
+        self.config_path = config_path
         self.scheduler = scheduler
         self._lock = threading.Lock()
+
+    def apply_config(self, config):
+        """
+        Persists a new config and rebuilds everything derived from it.
+
+        Done under the run lock so a pass in flight finishes against the config it started
+        with, rather than having its targets swapped out mid-loop.
+        """
+        with self._lock:
+            config_module.save_config(
+                {key: value for key, value in config.items() if key != "all_targets"},
+                self.config_path,
+            )
+
+            config["all_targets"] = config["targets"]
+            config["targets"] = config_module.usable_targets(config)
+            config["download_client"]["enabled"] = bool(
+                config["download_client"].get("enabled", True) and config["download_client"].get("url")
+            )
+
+            self.config = config
+            self.clients = {
+                "targets": clients_module.build_targets(config),
+                "download_client": clients_module.build_download_client(config),
+            }
+            if self.scheduler is not None:
+                self.scheduler.set_interval(config["cleanup"]["interval_minutes"])
+
+            log.info(
+                "Settings saved — targets: %s",
+                ", ".join(t.name for t in self.clients["targets"]) or "none",
+            )
 
     def run_once(self, force_stuck=False, dry_run=None):
         # Serialised: two overlapping passes would both see the same victims and the second

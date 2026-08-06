@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% block title %}Settings — Queue Warden{% endblock %}
+{% block content %}
+
+<h1>Settings</h1>
+<div class="sub">Saved changes apply immediately — no restart.</div>
+
+<div id="banner" class="banner hidden"></div>
+
+<h2>Targets</h2>
+<div class="sub">
+  Each *arr that owns releases. A target with no url or api key is kept but skipped, so an
+  app you have not set up yet stays quiet rather than erroring every cycle.
+</div>
+<div id="targets"></div>
+<button class="secondary" type="button" onclick="addTarget()">Add target</button>
+
+<h2>Download client</h2>
+<div class="card">
+  <div class="field">
+    <label>URL</label>
+    <input id="dc-url" placeholder="http://host.docker.internal:6500">
+  </div>
+  <div class="row">
+    <div class="field"><label>Username</label><input id="dc-user"></div>
+    <div class="field"><label>Password</label><input id="dc-pass" type="password"></div>
+  </div>
+  <label class="check"><input id="dc-enabled" type="checkbox"> Enabled</label>
+  <div class="hint">Disable to run queue-side only — stalls will no longer be detected.</div>
+</div>
+
+<h2>Detectors</h2>
+<div class="card">
+  <label class="check"><input id="st-enabled" type="checkbox"> <strong>Stalled downloads</strong></label>
+  <div class="hint">Torrents that stop moving. The *arr cannot see these — it still reads them as downloading.</div>
+  <div class="field"><label>Client states treated as bad (comma separated)</label>
+    <input id="st-states" placeholder="stalleddl, stalledup, error, missingfiles"></div>
+  <div class="row">
+    <div class="field"><label>Min age before stuck (minutes)</label><input id="st-age" type="number" min="1"></div>
+    <div class="field"><label>Consecutive 0 B/s checks</label><input id="st-streak" type="number" min="1"></div>
+  </div>
+  <div class="hint">A single zero reading is normal between pieces; a streak is not. Raise both if healthy downloads get removed.</div>
+</div>
+
+<div class="card">
+  <label class="check"><input id="fi-enabled" type="checkbox"> <strong>Failed imports</strong></label>
+  <div class="hint">Downloads that finished but the *arr could not file. The client cannot see these — the torrent looks healthy.</div>
+  <div class="field"><label>Queue states treated as terminal (comma separated)</label>
+    <input id="fi-states" placeholder="importblocked, failed, downloadfailed"></div>
+</div>
+
+<h2>Cleanup</h2>
+<div class="card">
+  <div class="row">
+    <div class="field"><label>Interval (minutes)</label><input id="cl-interval" type="number" min="1"></div>
+  </div>
+  <label class="check"><input id="cl-blocklist" type="checkbox"> Blocklist on removal</label>
+  <div class="hint">Off means items are removed but the same release can be grabbed again.</div>
+  <label class="check"><input id="cl-dry" type="checkbox"> Dry run</label>
+  <div class="hint">Report what would be removed without removing anything. Lifetime counters stay untouched.</div>
+</div>
+
+<h2>Notifications</h2>
+<div class="card">
+  <div class="field"><label>Discord webhook</label><input id="nt-discord"></div>
+  <div class="field"><label>Slack webhook</label><input id="nt-slack"></div>
+  <div class="row">
+    <div class="field"><label>Notify when removals reach</label><input id="nt-threshold" type="number" min="1"></div>
+  </div>
+  <label class="check"><input id="nt-onerror" type="checkbox"> Notify on error</label>
+</div>
+
+<div class="actions" style="margin-top:1.5rem">
+  <button type="button" onclick="save()">Save settings</button>
+  <a class="btn-link" href="/">Cancel</a>
+</div>
+
+<script>
+const FLAVOURS = {{ flavours | tojson }};
+let config = null;
+
+function el(id) { return document.getElementById(id); }
+
+function targetRow(target, index) {
+  const options = FLAVOURS.map(f =>
+    `<option value="${f}" ${target.flavour === f ? 'selected' : ''}>${f === 'arr' ? 'Sonarr-compatible' : 'Bookmarkarr'}</option>`
+  ).join('');
+  return `
+    <div class="card target" data-index="${index}">
+      <div class="row">
+        <div class="field"><label>Name</label><input class="t-name" value="${target.name || ''}"></div>
+        <div class="field"><label>Type</label><select class="t-flavour">${options}</select></div>
+      </div>
+      <div class="field"><label>URL</label><input class="t-url" value="${target.url || ''}"></div>
+      <div class="field"><label>API key</label><input class="t-key" type="password" value="${target.api_key || ''}"></div>
+      <label class="check"><input class="t-enabled" type="checkbox" ${target.enabled !== false ? 'checked' : ''}> Enabled</label>
+      <div class="actions" style="margin-top:.75rem">
+        <button class="secondary" type="button" onclick="testTarget('${(target.name || '').replace(/'/g, "")}')">Test</button>
+        <button class="secondary" type="button" onclick="removeTarget(${index})">Remove</button>
+        <span class="test-result reason"></span>
+      </div>
+    </div>`;
+}
+
+function renderTargets() {
+  el('targets').innerHTML = config.targets.map(targetRow).join('');
+}
+
+function addTarget() {
+  config.targets.push({ name: '', flavour: 'arr', url: '', api_key: '', enabled: true });
+  renderTargets();
+}
+
+function removeTarget(index) {
+  collect();
+  config.targets.splice(index, 1);
+  renderTargets();
+}
+
+async function testTarget(name) {
+  const row = [...document.querySelectorAll('.target')]
+    .find(node => node.querySelector('.t-name').value === name);
+  const out = row ? row.querySelector('.test-result') : null;
+  if (out) out.textContent = 'testing…';
+  try {
+    const response = await fetch(`/api/test/${encodeURIComponent(name)}`);
+    const body = await response.json();
+    if (out) out.textContent = body.message;
+  } catch (error) {
+    if (out) out.textContent = String(error);
+  }
+}
+
+function splitList(value) {
+  return value.split(',').map(part => part.trim().toLowerCase()).filter(Boolean);
+}
+
+function collect() {
+  config.targets = [...document.querySelectorAll('.target')].map(row => ({
+    name: row.querySelector('.t-name').value.trim(),
+    flavour: row.querySelector('.t-flavour').value,
+    url: row.querySelector('.t-url').value.trim(),
+    api_key: row.querySelector('.t-key').value.trim(),
+    enabled: row.querySelector('.t-enabled').checked,
+  }));
+
+  config.download_client.url = el('dc-url').value.trim();
+  config.download_client.username = el('dc-user').value;
+  config.download_client.password = el('dc-pass').value;
+  config.download_client.enabled = el('dc-enabled').checked;
+
+  config.detectors.stalled.enabled = el('st-enabled').checked;
+  config.detectors.stalled.states = splitList(el('st-states').value);
+  config.detectors.stalled.stuck_min_age_minutes = Number(el('st-age').value);
+  config.detectors.stalled.stuck_min_streak = Number(el('st-streak').value);
+
+  config.detectors.failed_import.enabled = el('fi-enabled').checked;
+  config.detectors.failed_import.states = splitList(el('fi-states').value);
+
+  config.cleanup.interval_minutes = Number(el('cl-interval').value);
+  config.cleanup.blocklist = el('cl-blocklist').checked;
+  config.cleanup.dry_run = el('cl-dry').checked;
+
+  config.notifications.discord_webhook = el('nt-discord').value.trim();
+  config.notifications.slack_webhook = el('nt-slack').value.trim();
+  config.notifications.notify_threshold = Number(el('nt-threshold').value);
+  config.notifications.notify_on_error = el('nt-onerror').checked;
+}
+
+function banner(message, ok) {
+  const node = el('banner');
+  node.className = 'banner ' + (ok ? 'good' : '');
+  node.innerHTML = message;
+  node.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+async function save() {
+  collect();
+  try {
+    const response = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    const body = await response.json();
+    if (body.success) {
+      banner(`Saved. Active targets: ${body.targets.join(', ') || 'none'}`, true);
+    } else {
+      banner('<strong>Not saved</strong><br>' + (body.errors || ['Unknown error']).join('<br>'), false);
+    }
+  } catch (error) {
+    banner('Not saved — ' + error, false);
+  }
+}
+
+async function load() {
+  config = await (await fetch('/api/config')).json();
+
+  renderTargets();
+  el('dc-url').value = config.download_client.url || '';
+  el('dc-user').value = config.download_client.username || '';
+  el('dc-pass').value = config.download_client.password || '';
+  el('dc-enabled').checked = config.download_client.enabled !== false;
+
+  el('st-enabled').checked = config.detectors.stalled.enabled !== false;
+  el('st-states').value = (config.detectors.stalled.states || []).join(', ');
+  el('st-age').value = config.detectors.stalled.stuck_min_age_minutes;
+  el('st-streak').value = config.detectors.stalled.stuck_min_streak;
+
+  el('fi-enabled').checked = config.detectors.failed_import.enabled !== false;
+  el('fi-states').value = (config.detectors.failed_import.states || []).join(', ');
+
+  el('cl-interval').value = config.cleanup.interval_minutes;
+  el('cl-blocklist').checked = config.cleanup.blocklist !== false;
+  el('cl-dry').checked = config.cleanup.dry_run === true;
+
+  el('nt-discord').value = config.notifications.discord_webhook || '';
+  el('nt-slack').value = config.notifications.slack_webhook || '';
+  el('nt-threshold').value = config.notifications.notify_threshold;
+  el('nt-onerror').checked = config.notifications.notify_on_error !== false;
+}
+
+load();
+</script>
+{% endblock %}

@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 
-from warden import clients as clients_module, config as config_module, state as state_module, web
+from warden import clients as clients_module, config as config_module, logbuffer, state as state_module, web
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 
@@ -25,6 +25,9 @@ def configure_logging():
     )
     # Flask's per-request log is noise next to the cleanup output.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    # Feeds the in-app log viewer, which works the same whether this runs under Docker,
+    # systemd, or in a terminal.
+    logbuffer.install()
 
 
 class Scheduler:
@@ -33,6 +36,18 @@ class Scheduler:
         self.run = run
         self.next_run = None
         self._stop = threading.Event()
+        self._wake = threading.Event()
+
+    def set_interval(self, minutes):
+        """
+        Applied from the settings UI. The sleeping loop is woken so a shortened interval
+        takes effect now rather than after the old, longer wait finishes.
+        """
+        new_interval = max(1, int(minutes)) * 60
+        if new_interval == self.interval:
+            return
+        self.interval = new_interval
+        self._wake.set()
 
     def start(self):
         thread = threading.Thread(target=self._loop, daemon=True)
@@ -47,7 +62,15 @@ class Scheduler:
             except Exception:  # noqa: BLE001
                 # Already recorded by Runtime.run_once; the loop must survive regardless.
                 logging.getLogger("warden").exception("Scheduled run failed")
-            self._stop.wait(self.interval)
+
+            # Waits on either signal, so an interval change does not have to sit out the
+            # remainder of the previous one.
+            self._wake.clear()
+            waited = 0.0
+            step = 1.0
+            while waited < self.interval and not self._stop.is_set() and not self._wake.is_set():
+                time.sleep(step)
+                waited += step
 
     def stop(self):
         self._stop.set()
@@ -74,7 +97,7 @@ def main():
     if config["cleanup"].get("dry_run"):
         log.warning("DRY RUN enabled — nothing will actually be removed")
 
-    runtime = web.Runtime(config, active, state, state_path, scheduler=None)
+    runtime = web.Runtime(config, active, state, state_path, scheduler=None, config_path=config_path)
     scheduler = Scheduler(config["cleanup"]["interval_minutes"], runtime.run_once)
     runtime.scheduler = scheduler
     scheduler.start()
