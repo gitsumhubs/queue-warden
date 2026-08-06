@@ -6,9 +6,6 @@ moving, and each *arr queue, for downloads that finished but failed to import. A
 removes is blocklisted at the *arr that owns it, so the same bad release is not picked again on
 the next search.
 
-It replaces two earlier single-purpose daemons — `rdt-cleanup` (stalls) and `arr-cleanup`
-(failed imports) — with one service that does both and knows about all three apps.
-
 ## Why both halves are needed
 
 A stalled torrent and a failed import are different failures, visible from different places:

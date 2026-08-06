@@ -1,9 +1,9 @@
 """
 Web UI and JSON API.
 
-Keeps what made both predecessors useful day to day: a run history you can scroll, lifetime
-metrics, per-target connection tests, and a manual trigger — including a dry run, so a
-cleanup can be reviewed before anything is actually removed.
+Built around what makes a cleanup daemon reviewable day to day: a run history you can scroll,
+lifetime metrics, per-target connection tests, and a manual trigger — including a dry run, so
+a pass can be inspected before anything is actually removed.
 """
 
 import logging

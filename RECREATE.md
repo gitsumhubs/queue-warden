@@ -9,14 +9,12 @@ something different instead of the same failing item.
 It watches two independent failure modes from the only place each is visible. A stalled transfer
 can only be seen at the download client, because the *arr still reports it as downloading. A
 failed import can only be seen in the *arr queue, because the torrent itself looks healthy.
-Watching one end alone leaves the other class stuck indefinitely, which is why the project merges
-two earlier single-purpose daemons (`rdt-cleanup` for stalls, `arr-cleanup` for failed imports)
-rather than replacing one with the other.
+Watching one end alone leaves the other class of failure stuck in the queue indefinitely, which
+is why both detectors exist rather than one.
 
 Targets are configuration, not code. Adding an *arr is a config entry; the only thing that varies
-between them is route shape, which is isolated in `warden/clients.py`. That is deliberate — the
-predecessors hardcoded `sonarr` and `radarr`, which is why Bookmarkarr went uncovered for as long
-as it did.
+between them is route shape, which is isolated in `warden/clients.py`. Hardcoding a fixed set of
+apps is what makes a new one require a code change instead of a config entry.
 
 ## Tech Stack
 
@@ -130,8 +128,8 @@ WantedBy=multi-user.target
 ## Configuration Files
 
 `config.json` holds live API keys and is gitignored; `config.json.example` is the committed
-template. This split is deliberate — the predecessor tracked its live config, which meant a
-routine `git add -A` would have published real credentials to a public repository.
+template. Tracking the live config instead would mean a routine `git add -A` publishes real
+credentials to a public repository.
 
 ## Running the Project
 
