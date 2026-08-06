@@ -20,14 +20,6 @@ A stalled torrent and a failed import are different failures, visible from diffe
 
 Watching only one end leaves the other class of failure to sit in the queue indefinitely.
 
-## Tech Stack
-
-- Language: Python 3.12
-- Web: Flask
-- HTTP: requests
-- Tests: pytest
-- No database — state is a JSON file
-
 ## Docker Compose
 
 ```yaml
@@ -142,6 +134,14 @@ pip install pytest && python -m pytest tests/ -q
 
 Every value can be overridden by environment variable. Targets are addressed by name:
 `SONARR_API_KEY`, `BOOKMARKARR_URL`, and so on. See RECREATE.md for the full list.
+
+## Tech Stack
+
+- Language: Python 3.12
+- Web: Flask
+- HTTP: requests
+- Tests: pytest
+- No database — state is a JSON file
 
 ## API
 
