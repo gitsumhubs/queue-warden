@@ -28,37 +28,57 @@ Watching only one end leaves the other class of failure to sit in the queue inde
 - Tests: pytest
 - No database — state is a JSON file
 
-## Quick start
+## Docker Compose
 
-Everything you need is one compose file — no source checkout, no config to write first:
+```yaml
+---
+services:
+  queue-warden:
+    image: ${QUEUE_WARDEN_IMAGE:-ghcr.io/gitsumhubs/queue-warden:latest}
+    container_name: queue-warden
+    environment:
+      - TZ=${TZ:-Etc/UTC}
+      - LOG_LEVEL=${QUEUE_WARDEN_LOG_LEVEL:-INFO}
+      # Optional: set these to configure without touching the Settings page.
+      - SONARR_URL=${SONARR_URL:-}
+      - SONARR_API_KEY=${SONARR_API_KEY:-}
+      - RADARR_URL=${RADARR_URL:-}
+      - RADARR_API_KEY=${RADARR_API_KEY:-}
+      - BOOKMARKARR_URL=${BOOKMARKARR_URL:-}
+      - BOOKMARKARR_API_KEY=${BOOKMARKARR_API_KEY:-}
+      - DOWNLOAD_CLIENT_URL=${DOWNLOAD_CLIENT_URL:-}
+      - DOWNLOAD_CLIENT_USERNAME=${DOWNLOAD_CLIENT_USERNAME:-}
+      - DOWNLOAD_CLIENT_PASSWORD=${DOWNLOAD_CLIENT_PASSWORD:-}
+      - DRY_RUN=${QUEUE_WARDEN_DRY_RUN:-}
+    ports:
+      - "${QUEUE_WARDEN_PORT:-3020}:3020"
+    # Lets the container reach *arrs and the download client running on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${QUEUE_WARDEN_CONFIG_PATH:-./data/config}:/app/config
+      - ${QUEUE_WARDEN_STATE_PATH:-./data/state}:/app/state
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:3020/api/status').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+```
 
 ```bash
-curl -O https://raw.githubusercontent.com/gitsumhubs/queue-warden/main/docker-compose.yml
 docker compose up -d
 ```
 
-Open <http://localhost:3020>, go to **Settings**, and add your *arrs. A starter config is written
-on first run, and anything saved in the UI persists to `./data/config`.
+Then open <http://localhost:3020> and add your *arrs on the **Settings** page. A starter config is
+written on first run; anything saved in the UI persists to `./data/config`.
 
-> **Start in dry-run.** Set `QUEUE_WARDEN_DRY_RUN=true` for the first day. Queue Warden will
-> report exactly what it *would* remove without touching anything, so you can check its judgement
-> before trusting it.
+Set `QUEUE_WARDEN_DRY_RUN=true` for the first day to see what it would remove without removing
+anything.
 
-### Connecting to your apps
-
-Inside a container, `localhost` means the container itself. Use:
-
-| Where your app runs | URL to use |
-|---------------------|------------|
-| On the Docker host | `http://host.docker.internal:8989` |
-| In a container on a shared network | `http://sonarr:8989` |
-
-The **Test** button beside each target confirms it immediately.
-
-### Optional environment configuration
-
-Copy `.env.example` to `.env` to change the port, pre-seed API keys, or enable dry-run without
-opening the UI. Every setting is available either way.
+Inside a container `localhost` means the container itself — use `http://host.docker.internal:8989`
+for apps on the Docker host, or `http://sonarr:8989` for apps on a shared Docker network.
 
 ## Prerequisites
 
