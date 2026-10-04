@@ -7,6 +7,7 @@ two daemons for as long as it was.
 """
 
 import json
+from copy import deepcopy
 import logging
 import os
 
@@ -36,8 +37,9 @@ DEFAULT_CONFIG = {
             "states": ["stalleddl", "stalledup", "error", "missingfiles"],
             "stuck_min_age_minutes": 10,
             "stuck_min_streak": 2,
-            "finished_threshold_minutes": 60,
         },
+        # Completed transfers no longer present in an owning *arr's queue.
+        "finished": {"enabled": True, "threshold_minutes": 60},
         # Queue side: the download finished and the *arr could not file it.
         "failed_import": {
             "enabled": True,
@@ -82,6 +84,29 @@ def _merge(base, override):
     return out
 
 
+def _with_defaults(raw):
+    """Keep old completion limits when upgrading to the separate finished detector."""
+    raw = deepcopy(raw)
+    detector_settings = raw.setdefault("detectors", {})
+    legacy = detector_settings.get("stalled", {}).pop("finished_threshold_minutes", None)
+    old_cleanup = raw.get("cleanup", {}).pop("finished_threshold_minutes", None)
+    if legacy is None:
+        legacy = old_cleanup
+    if legacy is not None:
+        detector_settings.setdefault("finished", {}).setdefault("threshold_minutes", legacy)
+    return _merge(deepcopy(DEFAULT_CONFIG), raw)
+
+
+def _finished_errors(settings):
+    errors = []
+    threshold = settings.get("threshold_minutes")
+    if type(threshold) is not int or threshold < 1:
+        errors.append("Finished cleanup age must be a whole number of minutes, at least 1")
+    if not isinstance(settings.get("enabled"), bool):
+        errors.append("Finished cleanup enabled must be true or false")
+    return errors
+
+
 def _env(name, fallback):
     """
     Environment override that ignores blanks.
@@ -118,9 +143,18 @@ def _apply_env(config):
         target["api_key"] = api_key
 
     client = config["download_client"]
-    client["url"] = _env("DOWNLOAD_CLIENT_URL", client.get("url", ""))
-    client["username"] = _env("DOWNLOAD_CLIENT_USERNAME", client.get("username", ""))
-    client["password"] = _env("DOWNLOAD_CLIENT_PASSWORD", client.get("password", ""))
+    for key in ("url", "username", "password"):
+        client[key] = _env(f"DOWNLOAD_CLIENT_{key.upper()}", _env(f"RDT_CLIENT_{key.upper()}", client.get(key, "")))
+
+    finished = config["detectors"]["finished"]
+    if os.getenv("FINISHED_THRESHOLD_MINUTES"):
+        finished["threshold_minutes"] = int(os.environ["FINISHED_THRESHOLD_MINUTES"])
+    if os.getenv("FINISHED_CLEANUP_ENABLED"):
+        finished["enabled"] = os.environ["FINISHED_CLEANUP_ENABLED"].lower() in ("1", "true", "yes")
+    stalled = config["detectors"]["stalled"]
+    for variable, key in (("STUCK_MIN_AGE_MINUTES", "stuck_min_age_minutes"), ("STUCK_MIN_STREAK", "stuck_min_streak")):
+        if os.getenv(variable):
+            stalled[key] = int(os.environ[variable])
 
     cleanup = config["cleanup"]
     if os.getenv("CLEANUP_INTERVAL_MINUTES"):
@@ -153,7 +187,7 @@ def normalise(raw):
     must not be baked into the file, or a container would permanently inherit whatever the
     env said at the moment someone pressed Save.
     """
-    config = _merge(DEFAULT_CONFIG, raw)
+    config = _with_defaults(raw)
 
     errors = []
     for index, target in enumerate(config.get("targets", [])):
@@ -173,6 +207,8 @@ def normalise(raw):
     stalled = config.get("detectors", {}).get("stalled", {})
     if stalled.get("stuck_min_streak", 1) < 1:
         errors.append("Stuck streak must be at least 1 — a single reading is normal for a healthy torrent")
+
+    errors.extend(_finished_errors(config["detectors"]["finished"]))
 
     failed_import = config.get("detectors", {}).get("failed_import", {})
     wait = failed_import.get("pending_warning_minutes")
@@ -225,7 +261,11 @@ def load_config(path="config.json"):
             # Defaults alone cannot reach anything, so this is fatal rather than silent.
             raise SystemExit(f"Invalid config at {path}: {error}") from error
 
-    config = _apply_env(_merge(DEFAULT_CONFIG, raw))
+    config = _apply_env(_with_defaults(raw))
+    # In particular, a zero completion age must not silently start deleting immediately.
+    errors = _finished_errors(config["detectors"]["finished"])
+    if errors:
+        raise SystemExit("Invalid config: " + "; ".join(errors))
 
     if is_first_run:
         # Written *after* environment overrides so the file on disk reflects what is actually

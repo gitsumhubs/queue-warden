@@ -42,6 +42,83 @@ def now_ts():
     return int(time.time())
 
 
+FINISHED_STATES = {"uploading", "stalledup", "pausedup", "queuedup", "forcedup", "checkingup", "complete", "completed", "finished"}
+
+
+def is_finished(torrent):
+    """rdt-client's completion states, excluding incomplete/error transfers."""
+    state = str(torrent.get("state") or "").lower()
+    try:
+        progress = float(torrent.get("progress", 0))
+    except (TypeError, ValueError):
+        progress = 0
+    if state in FINISHED_STATES:
+        return True
+    return (progress >= 1.0 and "queued" not in state and "error" not in state
+            and not state.endswith("dl")
+            and state not in {"downloading", "metadl", "missingfiles", "moving", "allocating"})
+
+
+def _positive_int(value):
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _finished_at(torrent, first_seen, now):
+    for key in ("completion_on", "completionOn"):
+        completed = _positive_int(torrent.get(key))
+        if completed:
+            return min(now, completed)
+    seeding = _positive_int(torrent.get("seeding_time"))
+    if seeding:
+        return now - seeding
+    for key in ("added_on", "addedOn"):
+        added = _positive_int(torrent.get(key))
+        if added:
+            return min(now, added)
+    # A client with no completion clock still gets swept, after a full observed wait.
+    return first_seen
+
+
+def detect_finished(torrents, queues, seen, settings, queues_available=True):
+    """Completed cleanup never blocklists, and never takes files from a pending import."""
+    if not settings.get("enabled", False):
+        seen.clear()
+        return [], []
+    owners = {}
+    for target, records in queues:
+        for record in records:
+            download_id = (record.get("download_id") or "").lower()
+            if download_id:
+                owners.setdefault(download_id, set()).add(target.name)
+
+    now = now_ts()
+    threshold = settings.get("threshold_minutes", 60) * 60
+    victims, waiting = [], []
+    current = set()
+    for torrent in torrents:
+        torrent_hash = str(torrent.get("hash") or "").lower()
+        if not torrent_hash or not is_finished(torrent):
+            continue
+        current.add(torrent_hash)
+        first_seen = seen.setdefault(torrent_hash, now)
+        completed = _finished_at(torrent, first_seen, now)
+        title = torrent.get("name") or torrent_hash
+        hold = ""
+        if not queues_available:
+            hold = "Queue unavailable; waiting to verify import"
+        elif torrent_hash in owners:
+            hold = "Waiting on " + ", ".join(sorted(owners[torrent_hash])) + " import"
+        waiting.append({"hash": torrent_hash, "title": title, "finished_at": completed, "hold": hold})
+        if not hold and now - completed >= threshold:
+            victims.append(Victim(title, f"finished {(now - completed) // 60}m ago; no pending import", "finished", "finished", torrent_hash))
+    for torrent_hash in set(seen) - current:
+        del seen[torrent_hash]
+    return victims, waiting
+
+
 def update_seen(seen, torrent_hash, progress, download_speed):
     """
     Tracks how long a torrent has been sitting at zero bytes per second.
@@ -96,6 +173,10 @@ def detect_stalled(torrents, seen, settings, force_stuck=False):
         entry = update_seen(seen, torrent_hash, progress, speed)
         state = str(torrent.get("state") or "").lower()
         name = torrent.get("name") or torrent_hash
+
+        # An idle completed upload is handled by the completion limit, not blocklisted.
+        if is_finished(torrent):
+            continue
 
         if state in bad_states or "error" in state:
             victims.append(Victim(name, f"client state: {state}", "state", "stalled", torrent_hash))

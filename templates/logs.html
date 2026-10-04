@@ -3,9 +3,13 @@
 {% block content %}
 
 <h1>Logs</h1>
-<div class="sub">Live tail of the last 1000 lines, held in memory.</div>
+<div class="sub">Live tail of the last 1000 lines. Recent lines are restored from the stored log after a restart. Archived RDT logs are retained separately when imported.</div>
 
 <div class="actions">
+  <select id="source" onchange="reset()" aria-label="Log source">
+    <option value="live">Queue Warden live</option>
+    {% if rdt_archive %}<option value="rdt">RDT Cleanup archive</option>{% endif %}
+  </select>
   <label class="check"><input id="follow" type="checkbox" checked> Follow</label>
   <select id="level" onchange="reset()">
     <option value="">All levels</option>
@@ -13,7 +17,13 @@
     <option value="WARNING">Warning</option>
     <option value="ERROR">Error</option>
   </select>
-  <button class="secondary" type="button" onclick="clearLogs()">Clear</button>
+  <select id="detector" onchange="reset()" aria-label="Cleanup activity">
+    <option value="">All activity</option>
+    <option value="finished">Completed cleanup</option>
+  </select>
+  <button id="clear-log" class="secondary" type="button" onclick="clearLogs()">Clear live logs</button>
+  <a class="btn-link" href="/logs/current">Download Queue Warden log</a>
+  {% if rdt_archive %}<a class="btn-link" href="/logs/rdt-archive">Download RDT log archive</a>{% endif %}
 </div>
 
 <div id="log" class="logbox"><div class="empty">Loading…</div></div>
@@ -68,14 +78,18 @@ function render(entries, append) {
 
 async function poll() {
   const level = document.getElementById('level').value;
+  const detector = document.getElementById('detector').value;
   const params = new URLSearchParams();
+  const source = document.getElementById('source').value;
+  if (source === 'rdt') params.set('source', 'rdt');
   if (level) params.set('level', level);
+  if (detector) params.set('detector', detector);
   if (lastId !== null) params.set('after', lastId);
 
   try {
     const response = await fetch('/api/logs?' + params.toString());
     const body = await response.json();
-    if (body.logs.length) render(body.logs, lastId !== null);
+    if (body.logs.length || lastId === null) render(body.logs, lastId !== null);
   } catch (error) {
     // A failed poll is not worth surfacing; the next tick will catch up.
   }
@@ -83,12 +97,13 @@ async function poll() {
 
 function reset() {
   lastId = null;
+  document.getElementById('clear-log').disabled = document.getElementById('source').value !== 'live';
   document.getElementById('log').innerHTML = '<div class="empty">Loading…</div>';
   poll();
 }
 
 async function clearLogs() {
-  await fetch('/api/logs/clear', { method: 'POST' });
+  if (document.getElementById('source').value === 'live') await fetch('/api/logs/clear', { method: 'POST' });
   reset();
 }
 

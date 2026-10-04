@@ -6,15 +6,35 @@ Runs the cleanup loop on a schedule and serves the web UI in the foreground, so 
 thing is one process under systemd or one container under Docker.
 """
 
+import json
 import logging
+from logging.handlers import RotatingFileHandler
+from datetime import datetime, timezone
 import os
 import sys
 import threading
 import time
+from pathlib import Path
 
-from warden import clients as clients_module, config as config_module, logbuffer, state as state_module, web
+from warden import clients as clients_module, config as config_module, logarchive, logbuffer, state as state_module, web
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+
+
+class PersistentLogFormatter(logging.Formatter):
+    """Keep live polling IDs and activity tags intact across restarts and rotation."""
+
+    def format(self, record):
+        message = record.getMessage()
+        if record.exc_info:
+            message += "\n" + self.formatException(record.exc_info)
+        return json.dumps({
+            "id": getattr(record, "warden_id", int(record.created * 1_000_000)),
+            "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+            "level": record.levelname,
+            "message": message,
+            "detector": getattr(record, "detector", ""),
+        }, ensure_ascii=False)
 
 
 def configure_logging():
@@ -27,7 +47,13 @@ def configure_logging():
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     # Feeds the in-app log viewer, which works the same whether this runs under Docker,
     # systemd, or in a terminal.
-    logbuffer.install()
+    log_path = Path(os.getenv("LOG_PATH", "logs/cleanup.log"))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    buffer = logbuffer.install()
+    buffer.restore(logarchive.restore(log_path))
+    file_handler = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+    file_handler.setFormatter(PersistentLogFormatter())
+    logging.getLogger().addHandler(file_handler)
 
 
 class Scheduler:
@@ -35,6 +61,7 @@ class Scheduler:
         self.interval = max(1, interval_minutes) * 60
         self.run = run
         self.next_run = None
+        self.fast_mode = False
         self._stop = threading.Event()
         self._wake = threading.Event()
 
@@ -54,9 +81,17 @@ class Scheduler:
         thread.start()
         return thread
 
+    def set_fast_mode(self, enabled):
+        self.fast_mode = bool(enabled)
+        self._wake.set()
+        logging.getLogger("warden").info("Scheduler mode: %s", "fast (30 seconds)" if enabled else "normal")
+
     def _loop(self):
         while not self._stop.is_set():
-            self.next_run = time.time() + self.interval
+            # Clear before the pass so an interval change during it is not lost.
+            self._wake.clear()
+            interval = 30 if self.fast_mode else self.interval
+            self.next_run = time.time() + interval
             try:
                 self.run()
             except Exception:  # noqa: BLE001
@@ -65,15 +100,11 @@ class Scheduler:
 
             # Waits on either signal, so an interval change does not have to sit out the
             # remainder of the previous one.
-            self._wake.clear()
-            waited = 0.0
-            step = 1.0
-            while waited < self.interval and not self._stop.is_set() and not self._wake.is_set():
-                time.sleep(step)
-                waited += step
+            self._wake.wait(timeout=interval)
 
     def stop(self):
         self._stop.set()
+        self._wake.set()
 
 
 def main():

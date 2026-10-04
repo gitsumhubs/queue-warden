@@ -26,7 +26,7 @@
     <div class="field"><label>Password</label><input id="dc-pass" type="password"></div>
   </div>
   <label class="check"><input id="dc-enabled" type="checkbox"> Enabled</label>
-  <div class="hint">Disable to run queue-side only — stalls will no longer be detected.</div>
+  <div class="hint">Disable to run queue-side only — stalled and completed torrents will no longer be cleaned up.</div>
 </div>
 
 <h2>Detectors</h2>
@@ -52,6 +52,12 @@
     <div class="field"><label>Hold back if more than this many are waiting</label><input id="fi-limit" type="number" min="1"></div>
   </div>
   <div class="hint">Import pending is also where a healthy download sits for a moment, so only items the *arr has put a warning on are timed, and the timer restarts if the warning clears. The wait is your window to import by hand; 0 turns this off. Many waiting at once usually means storage or a path rather than bad releases, so past the limit nothing is removed and the run reports an error.</div>
+</div>
+
+<div class="card">
+  <label class="check"><input id="fn-enabled" type="checkbox"> <strong>Completed downloads</strong></label>
+  <div class="field"><label>Delete completed downloads after (minutes)</label><input id="fn-age" type="number" min="1"></div>
+  <div class="hint">Removes completed torrents and their download files after this age, without blocklisting. Items still in any target's queue are held for import. If a target's queue cannot be read, completed cleanup waits until it can be checked.</div>
 </div>
 
 <h2>Cleanup</h2>
@@ -164,6 +170,9 @@ function collect() {
   config.detectors.failed_import.pending_warning_minutes = Number(el('fi-pending').value);
   config.detectors.failed_import.pending_warning_limit = Number(el('fi-limit').value);
 
+  config.detectors.finished.enabled = el('fn-enabled').checked;
+  config.detectors.finished.threshold_minutes = Number(el('fn-age').value);
+
   config.cleanup.interval_minutes = Number(el('cl-interval').value);
   config.cleanup.blocklist = el('cl-blocklist').checked;
   config.cleanup.dry_run = el('cl-dry').checked;
@@ -218,6 +227,9 @@ async function load() {
   el('fi-states').value = (config.detectors.failed_import.states || []).join(', ');
   el('fi-pending').value = config.detectors.failed_import.pending_warning_minutes;
   el('fi-limit').value = config.detectors.failed_import.pending_warning_limit;
+
+  el('fn-enabled').checked = config.detectors.finished.enabled !== false;
+  el('fn-age').value = config.detectors.finished.threshold_minutes;
 
   el('cl-interval').value = config.cleanup.interval_minutes;
   el('cl-blocklist').checked = config.cleanup.blocklist !== false;

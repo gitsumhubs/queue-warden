@@ -26,6 +26,8 @@
       <input type="hidden" name="force_stuck" value="1">
       <button class="secondary" type="submit">Run &amp; force stuck</button>
     </form>
+    <button id="fast-toggle" class="secondary" type="button">Enable 30s mode</button>
+    <span id="fast-status" class="reason" aria-live="polite"></span>
   </div>
 
   <div class="grid">
@@ -40,6 +42,10 @@
     <div class="card">
       <div class="stat">{{ metrics.by_detector.get('failed_import', 0) }}</div>
       <div class="stat-label">Failed imports</div>
+    </div>
+    <div class="card">
+      <div class="stat">{{ metrics.by_detector.get('finished', 0) }}</div>
+      <div class="stat-label">Completed downloads</div>
     </div>
     <div class="card">
       <div class="stat">{{ metrics.total_runs }}</div>
@@ -85,6 +91,28 @@
   </div>
   {% endif %}
 
+  <h2>Completed download cleanup</h2>
+  <div class="sub">
+    {% if not config.detectors.finished.enabled %}Completed cleanup is disabled.
+    {% elif not config.download_client.enabled %}Enable the download client to clean up completed torrents.
+    {% else %}Completed torrents and download files are removed after {{ config.detectors.finished.threshold_minutes }} minutes, once they leave every target's queue. Successful downloads are never blocklisted.{% endif %}
+  </div>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>Item</th><th>Completed age</th><th>Due in</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for item in finished %}
+        <tr>
+          <td class="title">{{ item.title }}</td>
+          <td class="reason">{{ item.age }}m</td>
+          <td class="reason">{{ 'Held' if item.hold else item.remaining|string + 'm' }}</td>
+          <td class="reason">{{ item.status }}</td>
+        </tr>
+        {% else %}<tr><td colspan="4" class="empty">No completed downloads waiting</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+
   <h2>Recent runs</h2>
   <div class="wrap">
     <table>
@@ -98,7 +126,7 @@
             {%- if run.dry_run %} <span class="tag tag-dry">dry</span>{% endif %}</td>
           <td>{{ run.deleted }}</td>
           <td>{{ run.errors|length }}</td>
-          <td class="reason">{{ run.duration_seconds }}s</td>
+          <td class="reason">{% if run.duration_seconds is not none %}{{ run.duration_seconds }}s{% else %}RDT archive{% endif %}</td>
         </tr>
         {% else %}
         <tr><td colspan="4" class="empty">No runs yet</td></tr>
@@ -118,7 +146,7 @@
         <tr>
           <td class="reason">{{ item.timestamp[:19]|replace('T', ' ') }}</td>
           <td><span class="tag tag-{{ item.detector }}">{{ item.detector|replace('_', ' ') }}</span></td>
-          <td class="title">{{ item.title }}</td>
+          <td class="title">{{ item.title }}{% if item.source == 'rdt-cleanup' %} <span class="tag tag-dry">RDT archive</span>{% endif %}</td>
           <td class="reason">{{ item.reason }}</td>
           <td class="reason">{{ item.target or '—' }}</td>
         </tr>
@@ -128,4 +156,21 @@
       </tbody>
     </table>
   </div>
+<script>
+let fastMode = false;
+function showFastMode(enabled) {
+  fastMode = enabled;
+  document.getElementById('fast-toggle').textContent = enabled ? 'Disable 30s mode' : 'Enable 30s mode';
+  document.getElementById('fast-status').textContent = enabled ? '30s mode on (until disabled or restarted)' : 'Normal schedule';
+}
+document.getElementById('fast-toggle').onclick = async () => {
+  try {
+    const response = await fetch('/api/fast-mode', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({enabled: !fastMode})});
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.message || 'Could not change scheduler mode');
+    showFastMode(body.fast_mode);
+  } catch (error) { document.getElementById('fast-status').textContent = String(error); }
+};
+fetch('/api/status').then(r => r.json()).then(body => showFastMode(body.fast_mode));
+</script>
 {% endblock %}

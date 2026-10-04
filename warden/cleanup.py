@@ -11,6 +11,7 @@ import logging
 import time
 
 from . import detectors, state as state_module
+from .config import FLAVOURS
 
 log = logging.getLogger("warden")
 
@@ -130,7 +131,9 @@ def run_cleanup(clients, config, state, force_stuck=False):
 
     # Download-client side: things that are not moving.
     torrents = []
-    if download_client is not None and settings["stalled"].get("enabled", True):
+    finished_settings = settings.get("finished", {"enabled": False})
+    client_read_failed = False
+    if download_client is not None and (settings["stalled"].get("enabled", True) or finished_settings.get("enabled", False)):
         try:
             if download_client.session is None:
                 download_client.login()
@@ -139,8 +142,32 @@ def run_cleanup(clients, config, state, force_stuck=False):
                 detectors.detect_stalled(torrents, state["seen"], settings["stalled"], force_stuck)
             )
         except Exception as error:  # noqa: BLE001
+            client_read_failed = True
             log.error("Download client read failed: %s", error)
             errors.append(f"download client: {error}")
+
+    if client_read_failed:
+        finished = []
+        waiting = [{**item, "hold": "Download client unavailable; waiting to verify completion"}
+                   for item in state.get("finished", [])]
+    else:
+        configured = config.get("all_targets", [])
+        available_names = {target.name for target in targets}
+        incomplete_targets = [entry.get("name") for entry in configured
+                              if entry.get("enabled", True) and (
+                                  not entry.get("url") or not entry.get("api_key")
+                                  or entry.get("flavour") not in FLAVOURS
+                                  or entry.get("name") not in available_names)]
+        finished, waiting = detectors.detect_finished(
+            torrents, queues, state.setdefault("finished_seen", {}), finished_settings,
+            queues_available=len(queues) == len(targets) and not incomplete_targets,
+        )
+    state["finished"] = waiting
+    victims.extend(finished)
+    for item in waiting:
+        age = max(0, detectors.now_ts() - item["finished_at"]) // 60
+        log.info("[finished] %s: %s", item["title"], item["hold"] or f"{age}m old; cleanup at {finished_settings.get('threshold_minutes', 60)}m",
+                 extra={"detector": "finished"})
 
     # A torrent can trip both detectors at once. Removing it twice would double-count the
     # metrics and log a phantom second cleanup, so the first reason wins.
@@ -165,6 +192,10 @@ def run_cleanup(clients, config, state, force_stuck=False):
             # No *arr owns it, so there is no release history to blocklist. It still gets
             # removed from the client below, just without a blocklist entry.
             unclaimed.append(victim)
+            if dry_run:
+                log.info("[client] DRY RUN would remove %s (%s)", victim.title, victim.reason,
+                         extra={"detector": victim.detector})
+                deleted.append(victim)
             continue
 
         removed_by_any = False
@@ -196,11 +227,19 @@ def run_cleanup(clients, config, state, force_stuck=False):
                 download_client.delete(hashes)
                 for victim in unclaimed:
                     if victim.download_hash:
-                        log.warning("[client] removed unclaimed %s (%s)", victim.title, victim.reason)
+                        log.warning("[client] removed %s (%s)", victim.title, victim.reason,
+                                    extra={"detector": victim.detector})
                         deleted.append(victim)
             except Exception as error:  # noqa: BLE001
-                log.error("Direct client removal failed: %s", error)
+                log.error("Direct client removal failed: %s", error,
+                          extra={"detector": "finished" if any(v.detector == "finished" for v in unclaimed) else "stalled"})
                 errors.append(f"download client delete: {error}")
+
+    if not dry_run:
+        removed_finished = {victim.download_hash for victim in deleted if victim.detector == "finished"}
+        state["finished"] = [item for item in waiting if item["hash"] not in removed_finished]
+        for torrent_hash in removed_finished:
+            state["finished_seen"].pop(torrent_hash, None)
 
     if torrents:
         current = {(torrent.get("hash") or "").lower() for torrent in torrents}

@@ -9,9 +9,13 @@ from warden import config as config_module, logbuffer, web
 class DummyScheduler:
     next_run = None
     interval_set_to = None
+    fast_mode = False
 
     def set_interval(self, minutes):
         self.interval_set_to = minutes
+
+    def set_fast_mode(self, enabled):
+        self.fast_mode = enabled
 
 
 @pytest.fixture
@@ -152,3 +156,66 @@ def test_dashboard_lists_downloads_waiting_on_import(client, runtime):
     assert "Waiting on import" in body
     assert "Stuck Show" in body
     assert json.loads(client.get("/api/status").data)["waiting_on_import"] == 1
+
+
+def test_finished_settings_round_trip_and_invalid_save_is_atomic(client, runtime, tmp_path):
+    payload = client.get("/api/config").get_json()
+    payload["detectors"]["finished"] = {"enabled": True, "threshold_minutes": 85}
+    assert client.post("/api/config", json=payload).status_code == 200
+    saved = json.loads((tmp_path / "config.json").read_text())
+    assert saved["detectors"]["finished"]["threshold_minutes"] == 85
+    payload["detectors"]["finished"]["threshold_minutes"] = -10
+    assert client.post("/api/config", json=payload).status_code == 400
+    assert runtime.config["detectors"]["finished"]["threshold_minutes"] == 85
+
+
+def test_dashboard_and_api_show_completed_downloads_waiting_for_cleanup(client, runtime, monkeypatch):
+    monkeypatch.setattr(web.detectors, "now_ts", lambda: 10000)
+    runtime.clients["download_client"] = object()
+    runtime.state["finished"] = [{"hash": "abc", "title": "Finished film", "finished_at": 9400, "hold": ""}]
+    assert "Finished film" in client.get("/").data.decode()
+    status = client.get("/api/status").get_json()
+    assert status["waiting_on_finished"] == 1
+    waiting = client.get("/api/finished").get_json()["items"]
+    assert waiting[0]["remaining"] == 50
+
+
+def test_finished_activity_is_visible_in_log_view(client):
+    handler = logbuffer.install()
+    handler.clear()
+    logging.getLogger("warden").warning("finished film removed", extra={"detector": "finished"})
+    logging.getLogger("warden").warning("unrelated warning")
+    logs = client.get("/api/logs?detector=finished").get_json()["logs"]
+    assert [entry["message"] for entry in logs] == ["finished film removed"]
+
+
+def test_fast_mode_control_is_reported_in_status(client):
+    response = client.post("/api/fast-mode", json={"enabled": True})
+    assert response.status_code == 200
+    assert client.get("/api/status").get_json()["fast_mode"] is True
+    client.post("/api/fast-mode", json={"enabled": False})
+    assert client.get("/api/status").get_json()["fast_mode"] is False
+
+
+def test_fast_mode_rejects_non_boolean_input(client):
+    assert client.post("/api/fast-mode", json={"enabled": "false"}).status_code == 400
+
+
+def test_archived_rdt_logs_are_viewable_and_downloadable(client, tmp_path, monkeypatch):
+    archive = tmp_path / "rdt-cleanup.log"
+    archive.write_text("2026-10-01 12:00:00,123 [INFO] unrelated\n2026-10-01 12:05:00,123 [INFO] finished movie removed\n")
+    monkeypatch.setenv("RDT_LOG_ARCHIVE", str(archive))
+    logs = client.get("/api/logs?source=rdt&detector=finished").get_json()["logs"]
+    assert [entry["message"] for entry in logs] == ["finished movie removed"]
+    download = client.get("/logs/rdt-archive")
+    assert download.status_code == 200
+    assert download.data == archive.read_bytes()
+
+
+def test_current_persistent_log_can_be_downloaded(client, tmp_path, monkeypatch):
+    path = tmp_path / "cleanup.log"
+    path.write_text("2026-10-04 12:05:00,123 [INFO] completed cleanup\n")
+    monkeypatch.setenv("LOG_PATH", str(path))
+    response = client.get("/logs/current")
+    assert response.status_code == 200
+    assert response.data == path.read_bytes()

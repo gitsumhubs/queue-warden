@@ -200,3 +200,51 @@ def test_import_pending_settings_are_validated():
     _, errors = config_module.normalise({"detectors": {"failed_import": {"pending_warning_minutes": 0}}})
 
     assert errors == []
+
+
+def test_legacy_unused_finished_threshold_is_migrated(tmp_path):
+    path = write(tmp_path, {"detectors": {"stalled": {"finished_threshold_minutes": 95}}})
+    cfg = config_module.load_config(path)
+    assert cfg["detectors"]["finished"]["threshold_minutes"] == 95
+    assert "finished_threshold_minutes" not in cfg["detectors"]["stalled"]
+
+
+def test_explicit_finished_settings_win_over_legacy_threshold():
+    cfg, errors = config_module.normalise({"detectors": {
+        "stalled": {"finished_threshold_minutes": 95},
+        "finished": {"threshold_minutes": 75},
+    }})
+    assert errors == []
+    assert cfg["detectors"]["finished"]["threshold_minutes"] == 75
+
+
+@pytest.mark.parametrize("threshold", [0, -1, 1.5, "sixty", True])
+def test_invalid_finished_threshold_is_rejected(threshold):
+    _, errors = config_module.normalise({"detectors": {"finished": {"threshold_minutes": threshold}}})
+    assert any("Finished" in error for error in errors)
+
+
+def test_rdt_environment_configuration_is_supported(tmp_path, monkeypatch):
+    monkeypatch.setenv("FINISHED_THRESHOLD_MINUTES", "80")
+    monkeypatch.setenv("FINISHED_CLEANUP_ENABLED", "false")
+    monkeypatch.setenv("STUCK_MIN_AGE_MINUTES", "25")
+    monkeypatch.setenv("STUCK_MIN_STREAK", "4")
+    monkeypatch.setenv("RDT_CLIENT_URL", "http://rdt:6500")
+    cfg = config_module.load_config(write(tmp_path, {}))
+    assert cfg["detectors"]["finished"] == {"enabled": False, "threshold_minutes": 80}
+    assert cfg["detectors"]["stalled"]["stuck_min_age_minutes"] == 25
+    assert cfg["detectors"]["stalled"]["stuck_min_streak"] == 4
+    assert cfg["download_client"]["url"] == "http://rdt:6500"
+
+
+def test_environment_overrides_do_not_change_defaults_for_later_loads(tmp_path, monkeypatch):
+    monkeypatch.setenv("FINISHED_CLEANUP_ENABLED", "false")
+    config_module.load_config(write(tmp_path, {}))
+    monkeypatch.delenv("FINISHED_CLEANUP_ENABLED")
+    assert config_module.load_config(write(tmp_path, {}))["detectors"]["finished"]["enabled"] is True
+
+
+def test_invalid_finished_environment_threshold_fails_startup(tmp_path, monkeypatch):
+    monkeypatch.setenv("FINISHED_THRESHOLD_MINUTES", "0")
+    with pytest.raises(SystemExit, match="Finished"):
+        config_module.load_config(write(tmp_path, {}))

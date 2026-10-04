@@ -1,7 +1,7 @@
 # Queue Warden
 
 Queue Warden clears and blocklists downloads that have gone wrong, across Sonarr, Radarr, and
-Bookmarkarr. It watches both ends of the pipeline: the download client, for transfers that stop
+Bookmarkarr, and sweeps completed torrents once imports are finished. It watches both ends of the pipeline: the download client, for transfers that stop
 moving, and each *arr queue, for downloads that finished but failed to import. Anything it
 removes is blocklisted at the *arr that owns it, so the same bad release is not picked again on
 the next search.
@@ -28,6 +28,7 @@ services:
     environment:
       - TZ=${TZ:-Etc/UTC}
       - LOG_LEVEL=${QUEUE_WARDEN_LOG_LEVEL:-INFO}
+      - LOG_PATH=/app/logs/cleanup.log
       # Optional: set these to configure without touching the Settings page.
       - SONARR_URL=${SONARR_URL:-}
       - SONARR_API_KEY=${SONARR_API_KEY:-}
@@ -39,6 +40,9 @@ services:
       - DOWNLOAD_CLIENT_USERNAME=${DOWNLOAD_CLIENT_USERNAME:-}
       - DOWNLOAD_CLIENT_PASSWORD=${DOWNLOAD_CLIENT_PASSWORD:-}
       - DRY_RUN=${QUEUE_WARDEN_DRY_RUN:-}
+      - FINISHED_CLEANUP_ENABLED=${FINISHED_CLEANUP_ENABLED:-}
+      - FINISHED_THRESHOLD_MINUTES=${FINISHED_THRESHOLD_MINUTES:-}
+      - RDT_LOG_ARCHIVE=/app/archive/rdt-cleanup.log
     ports:
       - "${QUEUE_WARDEN_PORT:-3020}:3020"
     # Lets the container reach *arrs and the download client running on the host.
@@ -47,6 +51,8 @@ services:
     volumes:
       - ${QUEUE_WARDEN_CONFIG_PATH:-./data/config}:/app/config
       - ${QUEUE_WARDEN_STATE_PATH:-./data/state}:/app/state
+      - ${QUEUE_WARDEN_LOGS_PATH:-./data/logs}:/app/logs
+      - ${QUEUE_WARDEN_ARCHIVE_PATH:-./data/archive}:/app/archive:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:3020/api/status').read()"]
       interval: 30s
@@ -102,6 +108,13 @@ pip install pytest && python -m pytest tests/ -q
 
 ## Features
 
+- **Completed-download cleanup** — removes completed torrents and their download files after a
+  configurable age (60 minutes by default), without blocklisting successful releases. An item
+  still present in any configured target's queue is held for import. An unreadable or incomplete
+  enabled target holds completed cleanup until its queue can be verified; disable unused targets.
+  Completion timestamps, seeding time, and added time are supported, in that order. Without any
+  clock, a persisted first-observed timer ensures a full wait rather than immediate deletion.
+  The dashboard lists completed age, time remaining, and import/outage holds.
 - **Stall detection** — removes torrents in `stalleddl`, `stalledup`, `error`, or `missingfiles`
   immediately, and torrents stuck at 0 B/s once they have been quiet for a configurable age and
   a run of consecutive checks. A single zero reading never counts: torrents idle briefly between
@@ -125,6 +138,13 @@ pip install pytest && python -m pytest tests/ -q
 - **Dry run** — see exactly what a pass would remove without removing anything.
 - **Run history and metrics** — every pass is recorded with what it removed and why, split by
   detector and by target.
+- **Live logs and RDT archive** — completed cleanup has its own log filter. Imported RDT logs
+  can be viewed and downloaded from Logs; archived deletions and totals remain in the dashboard.
+  Queue Warden logs persist under `data/logs`, rotate at 5 MiB with three backups, and restore
+  recent lines across those files after restarts, preserving activity tags and polling cursors.
+  The current log can also be downloaded there.
+- **30-second fast mode** — a dashboard toggle for troubleshooting. Normal scheduling returns
+  when disabled or the process restarts, and dry-run policy still applies.
 - **Notifications** — optional Discord and Slack webhooks.
 - **Resilient** — one unreachable target is logged and skipped; the rest of the run continues.
 
@@ -135,6 +155,7 @@ pip install pytest && python -m pytest tests/ -q
 | `targets[]` | One entry per *arr: `name`, `flavour` (`arr` or `bookmarkarr`), `url`, `api_key`, `enabled` |
 | `download_client` | `url`, `username`, `password`; set `enabled: false` to run queue-side only |
 | `detectors.stalled` | `states`, `stuck_min_age_minutes`, `stuck_min_streak` |
+| `detectors.finished` | `enabled`, `threshold_minutes` (default 60) for completed torrents and download files |
 | `detectors.failed_import` | `states` to treat as terminal; `pending_warning_minutes` (default 120, 0 turns it off) and `pending_warning_limit` (default 10) for imports left pending with a warning |
 | `cleanup.interval_minutes` | How often a pass runs (default 5) |
 | `cleanup.blocklist` | Whether removal also blocklists (default true) |
@@ -162,9 +183,43 @@ need a config file edit as well. See RECREATE.md for the full list.
 | `GET /api/status` | Last run, next run, lifetime metrics, configured targets, downloads waiting on import |
 | `GET /api/runs?limit=20` | Recent run summaries |
 | `GET /api/history?limit=50` | Recently removed items with reasons |
+| `GET /api/finished` | Completed downloads waiting for age or import, with hold reasons |
+| `GET /api/logs?detector=finished` | Recent completed-cleanup log entries |
+| `GET /api/logs?source=rdt` | Tail of the imported RDT log archive |
+| `GET /logs/rdt-archive` | Download the complete imported RDT log |
+| `GET /logs/current` | Download the current persisted Queue Warden log |
 | `GET /api/test/<name>` | Connection test for one target |
 | `POST /run` | Trigger a pass (`dry_run=1`, `force_stuck=1`) |
 | `POST /clear-error` | Dismiss the last recorded error |
+| `POST /api/fast-mode` | Toggle the temporary 30-second scheduler with `{"enabled": true}` |
+
+## Migrating RDT Cleanup
+
+The old unused `detectors.stalled.finished_threshold_minutes` value moves automatically to
+`detectors.finished.threshold_minutes`. The RDT environment variable `FINISHED_THRESHOLD_MINUTES`
+is supported, alongside `FINISHED_CLEANUP_ENABLED`, `STUCK_MIN_AGE_MINUTES`, and `STUCK_MIN_STREAK`.
+`RDT_CLIENT_URL`, `RDT_CLIENT_USERNAME`, and `RDT_CLIENT_PASSWORD` are accepted aliases;
+`DOWNLOAD_CLIENT_*` values take precedence.
+
+An optional offline import preserves RDT's completion limit, lifetime deletion counts, available
+history and runs. It keeps Queue Warden's existing connections, dry-run policy, and detector
+timers. Stop both cleanup daemons before importing so neither writes the destination state.
+
+```bash
+python -m warden.migrate_rdt \
+  --source /path/to/rdt-cleanup-v2 \
+  --config data/config/config.json \
+  --state data/state/state.json \
+  --archive data/archive
+```
+
+Backups of Queue Warden's pre-import config/state, RDT's original state, and its full log are
+kept in the archive directory. Importing again is a no-op. Imported history remains subject to
+the configured retention limits; the complete source state is retained in the archive. RDT only
+stores a limited number of runs, so only those available runs are added to the run counter.
+
+Build and start the new Queue Warden image before retiring RDT Cleanup. Use the source-build
+Compose override when the migration has not yet been published in your chosen registry image.
 
 ## Notes
 

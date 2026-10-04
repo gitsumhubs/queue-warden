@@ -1,10 +1,4 @@
-"""
-In-memory ring buffer of recent log records, for the log viewer.
-
-Kept in memory rather than read back off disk so the viewer works identically whether the
-daemon logs to a file, to journald, or to a container's stdout — which is three different
-places across the deployments this replaces.
-"""
+"""Recent log records for the live viewer, restored from the rotating log on startup."""
 
 import logging
 import threading
@@ -28,19 +22,20 @@ class RingBufferHandler(logging.Handler):
             message = str(record.msg)
 
         with self._lock:
-            self._counter += 1
+            self._counter = max(self._counter + 1, int(record.created * 1_000_000))
+            record.warden_id = self._counter
             self.records.append(
                 {
-                    # Monotonic id so the viewer can poll for "anything after this" without
-                    # relying on timestamps, which collide at sub-second resolution.
+                    # Time-based floor survives restarts; the counter breaks timestamp ties.
                     "id": self._counter,
                     "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
                     "level": record.levelname,
                     "message": message[:2000],
+                    "detector": getattr(record, "detector", ""),
                 }
             )
 
-    def tail(self, limit=200, after_id=None, level=None):
+    def tail(self, limit=200, after_id=None, level=None, detector=None):
         with self._lock:
             records = list(self.records)
 
@@ -49,12 +44,21 @@ class RingBufferHandler(logging.Handler):
         if level:
             wanted = level.upper()
             records = [record for record in records if record["level"] == wanted]
+        if detector:
+            records = [record for record in records if record.get("detector") == detector]
 
         return records[-limit:]
 
     def clear(self):
         with self._lock:
             self.records.clear()
+
+    def restore(self, records):
+        """Prime the live viewer from disk before emitting fresh records."""
+        with self._lock:
+            for record in records:
+                self.records.append(dict(record))
+                self._counter = max(self._counter, record["id"])
 
 
 _handler = None

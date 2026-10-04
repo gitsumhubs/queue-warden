@@ -45,3 +45,16 @@ def test_a_healthy_record_has_no_messages(monkeypatch):
 
     assert record["tracked_status"] == "ok"
     assert record["messages"] == []
+
+
+def test_arr_queue_reads_every_page_before_proving_an_import_is_absent(monkeypatch):
+    def get(url, **kwargs):
+        page = kwargs["params"]["page"]
+        if page == 1:
+            return FakeResponse({"records": [{"id": n, "downloadId": f"h{n}"} for n in range(1000)], "totalRecords": 1001})
+        assert page == 2
+        return FakeResponse({"records": [{"id": 1000, "downloadId": "FINISHED"}], "totalRecords": 1001})
+    monkeypatch.setattr(clients.requests, "get", get)
+    records = clients.ArrTarget("Sonarr", "http://sonarr:8989", "key").get_queue()
+    assert len(records) == 1001
+    assert records[-1]["download_id"] == "finished"

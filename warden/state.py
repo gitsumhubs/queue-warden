@@ -22,12 +22,14 @@ def _empty():
         "seen": {},
         # Per target: downloads sitting in import-pending with a warning, and since when.
         "pending": {},
+        "finished": [],
+        "finished_seen": {},
         "history": [],
         "runs": [],
         "metrics": {
             "total_deleted": 0,
             "total_runs": 0,
-            "by_detector": {"stalled": 0, "failed_import": 0},
+            "by_detector": {"stalled": 0, "failed_import": 0, "finished": 0},
             "by_target": {},
             "last_error": None,
         },

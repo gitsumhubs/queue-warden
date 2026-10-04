@@ -39,8 +39,11 @@
         "missingfiles"
       ],
       "stuck_min_age_minutes": 10,
-      "stuck_min_streak": 2,
-      "finished_threshold_minutes": 60
+      "stuck_min_streak": 2
+    },
+    "finished": {
+      "enabled": true,
+      "threshold_minutes": 60
     },
     "failed_import": {
       "enabled": true,

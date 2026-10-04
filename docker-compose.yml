@@ -6,6 +6,7 @@ services:
     environment:
       - TZ=${TZ:-Etc/UTC}
       - LOG_LEVEL=${QUEUE_WARDEN_LOG_LEVEL:-INFO}
+      - LOG_PATH=/app/logs/cleanup.log
       # Optional: set these to configure without touching the Settings page.
       - SONARR_URL=${SONARR_URL:-}
       - SONARR_API_KEY=${SONARR_API_KEY:-}
@@ -17,6 +18,14 @@ services:
       - DOWNLOAD_CLIENT_USERNAME=${DOWNLOAD_CLIENT_USERNAME:-}
       - DOWNLOAD_CLIENT_PASSWORD=${DOWNLOAD_CLIENT_PASSWORD:-}
       - DRY_RUN=${QUEUE_WARDEN_DRY_RUN:-}
+      - FINISHED_CLEANUP_ENABLED=${FINISHED_CLEANUP_ENABLED:-}
+      - FINISHED_THRESHOLD_MINUTES=${FINISHED_THRESHOLD_MINUTES:-}
+      - STUCK_MIN_AGE_MINUTES=${STUCK_MIN_AGE_MINUTES:-}
+      - STUCK_MIN_STREAK=${STUCK_MIN_STREAK:-}
+      - RDT_CLIENT_URL=${RDT_CLIENT_URL:-}
+      - RDT_CLIENT_USERNAME=${RDT_CLIENT_USERNAME:-}
+      - RDT_CLIENT_PASSWORD=${RDT_CLIENT_PASSWORD:-}
+      - RDT_LOG_ARCHIVE=/app/archive/rdt-cleanup.log
     ports:
       - "${QUEUE_WARDEN_PORT:-3020}:3020"
     # Lets the container reach *arrs and the download client running on the host.
@@ -25,6 +34,8 @@ services:
     volumes:
       - ${QUEUE_WARDEN_CONFIG_PATH:-./data/config}:/app/config
       - ${QUEUE_WARDEN_STATE_PATH:-./data/state}:/app/state
+      - ${QUEUE_WARDEN_LOGS_PATH:-./data/logs}:/app/logs
+      - ${QUEUE_WARDEN_ARCHIVE_PATH:-./data/archive}:/app/archive:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:3020/api/status').read()"]
       interval: 30s

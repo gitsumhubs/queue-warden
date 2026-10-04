@@ -10,7 +10,7 @@ import logging
 import os
 import threading
 
-from flask import Flask, jsonify, redirect, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, send_file
 
 from . import (
     cleanup as cleanup_module,
@@ -18,6 +18,7 @@ from . import (
     config as config_module,
     detectors,
     logbuffer,
+    logarchive,
     notify,
     state as state_module,
 )
@@ -56,6 +57,21 @@ def _waiting(runtime):
     return sorted(rows, key=lambda row: row["remaining"])
 
 
+def _finished(runtime):
+    settings = runtime.config["detectors"].get("finished", {})
+    if not settings.get("enabled", False) or runtime.clients["download_client"] is None:
+        return []
+    wait = settings.get("threshold_minutes", 60)
+    now = detectors.now_ts()
+    rows = []
+    for item in list(runtime.state.get("finished", [])):
+        age = max(0, now - item["finished_at"]) // 60
+        remaining = max(0, wait - age)
+        rows.append({**item, "age": age, "remaining": remaining,
+                     "status": item.get("hold") or ("Waiting for age" if remaining else "Ready for next pass")})
+    return sorted(rows, key=lambda row: row["remaining"])
+
+
 def create_app(runtime):
     """`runtime` carries the live config, clients, state, and scheduler."""
     app = Flask(__name__, template_folder=TEMPLATE_DIR)
@@ -68,6 +84,7 @@ def create_app(runtime):
             runs=runtime.state["runs"][:20],
             history=runtime.state["history"][:50],
             waiting=_waiting(runtime),
+            finished=_finished(runtime),
             targets=[target.name for target in runtime.clients["targets"]],
             config=runtime.config,
             next_run=runtime.scheduler.next_run,
@@ -85,9 +102,23 @@ def create_app(runtime):
             by_target=metrics.get("by_target", {}),
             last_error=metrics.get("last_error"),
             waiting_on_import=len(_waiting(runtime)),
+            waiting_on_finished=len(_finished(runtime)),
             targets=[target.name for target in runtime.clients["targets"]],
             dry_run=runtime.config["cleanup"].get("dry_run", False),
+            fast_mode=getattr(runtime.scheduler, "fast_mode", False),
         )
+
+    @app.route("/api/finished")
+    def finished_items():
+        return jsonify(items=_finished(runtime))
+
+    @app.route("/api/fast-mode", methods=["POST"])
+    def fast_mode():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or not isinstance(data.get("enabled"), bool):
+            return jsonify(success=False, message="enabled must be true or false"), 400
+        runtime.scheduler.set_fast_mode(data["enabled"])
+        return jsonify(success=True, fast_mode=runtime.scheduler.fast_mode)
 
     @app.route("/api/runs")
     def runs():
@@ -154,10 +185,29 @@ def create_app(runtime):
 
     @app.route("/logs")
     def logs_page():
-        return render_template("logs.html", config=runtime.config)
+        return render_template("logs.html", config=runtime.config, rdt_archive=logarchive.path().is_file())
+
+    @app.route("/logs/rdt-archive")
+    def rdt_archive():
+        if not logarchive.path().is_file():
+            return jsonify(error="No RDT log archive available"), 404
+        return send_file(logarchive.path(), as_attachment=True, download_name="rdt-cleanup.log", mimetype="text/plain")
+
+    @app.route("/logs/current")
+    def current_log():
+        filename = os.path.abspath(os.getenv("LOG_PATH", "logs/cleanup.log"))
+        if not os.path.isfile(filename):
+            return jsonify(error="No persisted Queue Warden log available"), 404
+        return send_file(filename, as_attachment=True, download_name="queue-warden.log", mimetype="text/plain")
 
     @app.route("/api/logs")
     def api_logs():
+        if request.args.get("source") == "rdt":
+            return jsonify(logs=logarchive.tail(
+                limit=request.args.get("limit", default=300, type=int),
+                after_id=request.args.get("after", type=int),
+                level=request.args.get("level"), detector=request.args.get("detector"),
+            ))
         handler = logbuffer.get_handler()
         if handler is None:
             return jsonify(logs=[])
@@ -168,6 +218,7 @@ def create_app(runtime):
                 limit=request.args.get("limit", default=300, type=int),
                 after_id=after,
                 level=request.args.get("level"),
+                detector=request.args.get("detector"),
             )
         )
 

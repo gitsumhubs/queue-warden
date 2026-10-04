@@ -91,16 +91,25 @@ class ArrTarget:
         again: it says whether the *arr is unhappy with the item, which is the only thing
         that tells a stuck import from one that is about to run.
         """
-        response = requests.get(
-            f"{self.url}/api/v3/queue",
-            headers=self._headers(),
-            params={"page": 1, "pageSize": 1000},
-            timeout=TIMEOUT,
-        )
-        response.raise_for_status()
-
+        raw_records = []
+        page = 1
+        while True:
+            response = requests.get(
+                f"{self.url}/api/v3/queue", headers=self._headers(),
+                params={"page": page, "pageSize": 1000}, timeout=TIMEOUT,
+            )
+            response.raise_for_status()
+            payload = response.json() or {}
+            batch = payload.get("records", [])
+            raw_records.extend(batch)
+            total = payload.get("totalRecords")
+            if not batch or (total is not None and len(raw_records) >= total):
+                break
+            if total is None and len(batch) < 1000:
+                break
+            page += 1
         records = []
-        for record in (response.json() or {}).get("records", []):
+        for record in raw_records:
             records.append(
                 {
                     "id": record.get("id"),

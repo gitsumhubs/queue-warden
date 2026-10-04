@@ -38,6 +38,8 @@ from the target's `name`, upper-cased with hyphens as underscores.
 | CONFIG_PATH | No | config.json | Path to the config file |
 | STATE_PATH | No | state/state.json | Path to persisted state |
 | LOG_LEVEL | No | INFO | Python log level |
+| LOG_PATH | No | logs/cleanup.log | Persisted rotating log; Compose sets /app/logs/cleanup.log |
+| QUEUE_WARDEN_LOGS_PATH | No | ./data/logs | Host directory for persisted logs (5 MiB plus three backups) |
 | SONARR_URL | No | - | Overrides the Sonarr target url |
 | SONARR_API_KEY | No | - | Overrides the Sonarr target api key |
 | RADARR_URL | No | - | Overrides the Radarr target url |
@@ -48,6 +50,13 @@ from the target's `name`, upper-cased with hyphens as underscores.
 | DOWNLOAD_CLIENT_USERNAME | No | - | Download client username |
 | DOWNLOAD_CLIENT_PASSWORD | No | - | Download client password |
 | CLEANUP_INTERVAL_MINUTES | No | 5 | Minutes between passes |
+| FINISHED_CLEANUP_ENABLED | No | true | Enable completed torrent/file cleanup |
+| FINISHED_THRESHOLD_MINUTES | No | 60 | Minimum completed age in minutes; must be at least 1 |
+| STUCK_MIN_AGE_MINUTES | No | 10 | RDT-compatible stalled-download age override |
+| STUCK_MIN_STREAK | No | 2 | RDT-compatible consecutive zero-speed checks |
+| RDT_CLIENT_URL / USERNAME / PASSWORD | No | - | Legacy aliases for DOWNLOAD_CLIENT_URL / USERNAME / PASSWORD |
+| RDT_LOG_ARCHIVE | No | archive/rdt-cleanup.log | Preserved RDT log; Compose sets /app/archive/rdt-cleanup.log |
+| QUEUE_WARDEN_ARCHIVE_PATH | No | ./data/archive | Host archive directory mounted read-only by Compose |
 | DRY_RUN | No | true | Report only, remove nothing. `QUEUE_WARDEN_DRY_RUN` is accepted too |
 | WEBUI_HOST | No | 0.0.0.0 | Web UI bind address |
 | WEBUI_PORT | No | 3020 | Web UI port |
@@ -58,6 +67,22 @@ from the target's `name`, upper-cased with hyphens as underscores.
 
 - Port: 3020
 - Registered in portctl as: queue-warden
+
+## Service / Persistence
+
+- Runs as Docker Compose service/container `queue-warden`, with `restart: unless-stopped`.
+- Compose files: `docker-compose.yml` and `docker-compose.build.yml` for source builds.
+- Internal URL: `http://192.168.1.4:3020`.
+- Config/state: `data/config` and `data/state`; ongoing logs: `data/logs`; migration backups/logs: `data/archive`.
+- This server uses the local source-built `queue-warden:local` image for the RDT migration.
+  `.env` selects `QUEUE_WARDEN_IMAGE=queue-warden:local`; GitHub/GHCR publication is separate.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+docker compose stop queue-warden
+docker compose ps queue-warden
+docker compose logs --tail 100 queue-warden
+```
 
 ## Setup Instructions
 
@@ -122,6 +147,9 @@ WantedBy=multi-user.target
 | `warden/state.py` | Persisted stall streaks, import-pending timers, run history, lifetime metrics |
 | `warden/web.py` | Flask app, JSON API, `Runtime` shared handle |
 | `warden/notify.py` | Discord/Slack webhooks |
+| `warden/logbuffer.py` | Live log buffer with completed-cleanup filtering |
+| `warden/logarchive.py` | Bounded tails of persisted Queue Warden and preserved RDT logs |
+| `warden/migrate_rdt.py` | Offline, idempotent settings/history import and source backups |
 | `templates/index.html` | Dashboard |
 | `tests/` | pytest suite |
 
@@ -135,12 +163,62 @@ credentials to a public repository.
 
 ```bash
 python main.py                                   # dev
-docker compose up -d --build                     # prod
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build  # local source deployment
 docker run --rm -v "$PWD":/work -w /work python:3.12-slim \
   bash -lc 'pip install -q -r requirements.txt pytest && python -m pytest tests/ -q'
 ```
 
 ## Design Notes
+
+### RDT Cleanup Migration
+
+Completed cleanup runs independently of stalled detection. Its settings live under
+`detectors.finished`: `enabled` and `threshold_minutes`. The old unused finished threshold
+under `detectors.stalled` is migrated on load/save. All completion removals, dry runs, waiting
+items and errors appear in Queue Warden's existing history, metrics and logs. A 30-second
+scheduler toggle is available on the dashboard and resets to normal mode on restart.
+
+On this server, RDT Cleanup's scheduler is disabled after cutover, while its project and
+systemd definition remain for rollback. Arr Cleanup is separate from this migration.
+
+Before importing, build the current source image and stop both writers. The importer refuses
+invalid destination JSON and backs up current Queue Warden config/state. It adds RDT's lifetime
+deletions by detector, available history and stored runs exactly once, and copies the full RDT
+state and log. Current Queue Warden credentials, dry-run policy and import timers are retained.
+Historical entries follow `state.max_history` / `state.max_runs`; full originals stay archived.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml build queue-warden
+systemctl stop rdt-cleanup.service
+docker compose stop queue-warden
+python -m warden.migrate_rdt \
+  --source /home/josh/Projects/rdt-cleanup/rdt-cleanup-v2 \
+  --config data/config/config.json \
+  --state data/state/state.json \
+  --archive data/archive
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
+systemctl disable rdt-cleanup.service
+```
+
+Verify `/api/status`, `/api/finished`, dashboard metrics, and the RDT archive in Logs. A repeated
+import is a no-op; the `migrations.rdt-cleanup` marker records the transferred totals. Backups
+are `data/archive/qw-config-before-rdt.json`, `qw-state-before-rdt.json`, `rdt-state.json`, and
+`rdt-cleanup.log`. The archive bind mount is read-only. `.dockerignore` excludes live state/config,
+archives and development caches from the Docker build context.
+
+Queue Warden also writes ongoing logs to `LOG_PATH` (`data/logs/cleanup.log` on this server).
+Logs rotate at 5 MiB with three backups. Startup restores up to 1000 recent lines to the live
+viewer across the current file and backups. Files use JSON lines to preserve polling IDs and
+detector tags after restart; existing plain-text logs remain readable. `/logs/current` downloads
+the current file. Clearing the live viewer keeps the stored file and RDT archive intact.
+
+```bash
+# Roll back only while both cleanup writers are stopped.
+docker compose stop queue-warden
+cp data/archive/qw-config-before-rdt.json data/config/config.json
+cp data/archive/qw-state-before-rdt.json data/state/state.json
+systemctl enable --now rdt-cleanup.service
+```
 
 Dry run defaults to on. A first run happens before anyone has reviewed what this daemon considers
 removable, and the alternative is a service that starts deleting and blocklisting the moment
@@ -201,6 +279,15 @@ file that the next start would discard. A corrupt state file is discarded with a
 than being fatal: it costs stall streaks and history, not correctness.
 
 ## Troubleshooting
+
+**A completed torrent remains after its 60-minute limit.** Check "Completed download cleanup"
+on the dashboard. Items still in any target's queue are held; terminal or stuck-import rules
+handle those separately. All enabled targets must have usable URLs, keys, and readable queues.
+Disable targets you do not use. Completed cleanup never blocklists a successful release.
+
+**RDT's old logs disappeared from the live log view.** Choose "RDT Cleanup archive" under Logs.
+The archive is separate from Queue Warden's live memory buffer and survives restarts. Download
+the full archive there; clearing live logs does not alter it.
 
 **An import that needs manual attention is never removed.** Check the dashboard's "Waiting on
 import" list. An item only appears there while the *arr shows it as import pending *with a
