@@ -1,7 +1,7 @@
 """
-Persisted state: stall tracking, run history, and lifetime counters.
+Persisted state: stall tracking, import-pending timers, run history, and lifetime counters.
 
-Kept on disk because the stall detector needs to remember what a torrent looked like on
+Kept on disk because the detectors that wait need to remember what an item looked like on
 previous passes, and because the run history is the main thing that makes the daemon
 reviewable after the fact rather than just a log to grep.
 """
@@ -20,6 +20,8 @@ _lock = threading.Lock()
 def _empty():
     return {
         "seen": {},
+        # Per target: downloads sitting in import-pending with a warning, and since when.
+        "pending": {},
         "history": [],
         "runs": [],
         "metrics": {

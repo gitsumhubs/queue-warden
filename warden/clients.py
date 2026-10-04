@@ -54,6 +54,16 @@ class RdtClient:
         response.raise_for_status()
 
 
+def _status_messages(record):
+    """The *arr's own explanation for a warning, flattened to plain strings."""
+    messages = []
+    for entry in record.get("statusMessages") or []:
+        messages.extend(text for text in (entry.get("messages") or []) if text)
+    if not messages and record.get("errorMessage"):
+        messages.append(record["errorMessage"])
+    return messages
+
+
 class ArrTarget:
     """Sonarr, Radarr, Lidarr, Readarr — anything speaking the v3 queue API."""
 
@@ -77,7 +87,9 @@ class ArrTarget:
         Normalised queue records: id, download_id (torrent hash), title, state.
 
         `trackedDownloadState` is the field that says whether an import failed;
-        `status` alone only reports the transfer.
+        `status` alone only reports the transfer. `trackedDownloadStatus` is separate
+        again: it says whether the *arr is unhappy with the item, which is the only thing
+        that tells a stuck import from one that is about to run.
         """
         response = requests.get(
             f"{self.url}/api/v3/queue",
@@ -96,6 +108,8 @@ class ArrTarget:
                     "title": record.get("title") or f"Queue item {record.get('id')}",
                     "state": str(record.get("trackedDownloadState") or "").lower(),
                     "status": str(record.get("status") or "").lower(),
+                    "tracked_status": str(record.get("trackedDownloadStatus") or "").lower(),
+                    "messages": _status_messages(record),
                 }
             )
         return records

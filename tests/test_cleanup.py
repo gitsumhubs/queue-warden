@@ -163,3 +163,95 @@ def test_quiet_run_still_records_a_run():
 
     assert deleted == [] and errors == []
     assert state["metrics"]["total_runs"] == 1
+
+
+PENDING_CONFIG = {
+    **CONFIG,
+    "detectors": {
+        **CONFIG["detectors"],
+        "failed_import": {
+            **CONFIG["detectors"]["failed_import"],
+            "pending_warning_minutes": 120,
+            "pending_warning_limit": 2,
+        },
+    },
+}
+
+
+def stuck(queue_id, download_id):
+    return {
+        "id": queue_id,
+        "download_id": download_id,
+        "title": f"Stuck {download_id}",
+        "state": "importpending",
+        "status": "completed",
+        "tracked_status": "warning",
+        "messages": ["No files found are eligible for import"],
+    }
+
+
+def state_with_old_timers(target_name, *download_ids):
+    state = fresh_state()
+    old = cleanup.detectors.now_ts() - 3 * 3600
+    state["pending"] = {target_name: {download_id: {"first_seen": old} for download_id in download_ids}}
+    return state
+
+
+def test_import_stuck_with_a_warning_is_left_alone_until_the_wait_runs_out():
+    target = FakeTarget("Sonarr", [stuck(11, "aaa")])
+    clients = {"targets": [target], "download_client": None}
+    state = fresh_state()
+
+    deleted, errors = cleanup.run_cleanup(clients, PENDING_CONFIG, state)
+
+    assert deleted == [] and errors == []
+    assert target.removed == []
+    assert "aaa" in state["pending"]["Sonarr"]
+
+    state["pending"]["Sonarr"]["aaa"]["first_seen"] -= 3 * 3600
+    deleted, errors = cleanup.run_cleanup(clients, PENDING_CONFIG, state)
+
+    assert errors == []
+    assert target.removed == [(11, True)]
+    assert [victim.title for victim in deleted] == ["Stuck aaa"]
+
+
+def test_many_stuck_imports_at_once_are_held_back_as_a_storage_problem():
+    # Three waiting against a limit of two: more likely a missing mount than three bad releases.
+    target = FakeTarget("Sonarr", [stuck(number, f"d{number}") for number in (1, 2, 3)])
+    clients = {"targets": [target], "download_client": None}
+
+    deleted, errors = cleanup.run_cleanup(clients, PENDING_CONFIG, state_with_old_timers("Sonarr", "d1", "d2", "d3"))
+
+    assert deleted == []
+    assert target.removed == []
+    assert any("import pending" in error for error in errors)
+
+
+def test_the_limit_counts_what_is_waiting_not_only_what_is_due():
+    # In an outage items come due a few at a time; one due item among many waiting is still held.
+    target = FakeTarget("Sonarr", [stuck(number, f"d{number}") for number in (1, 2, 3)])
+    clients = {"targets": [target], "download_client": None}
+
+    deleted, errors = cleanup.run_cleanup(clients, PENDING_CONFIG, state_with_old_timers("Sonarr", "d1"))
+
+    assert deleted == []
+    assert any("import pending" in error for error in errors)
+
+
+def test_an_unreachable_target_keeps_its_import_timers():
+    clients = {"targets": [FailingTarget("Sonarr", [])], "download_client": None}
+    state = state_with_old_timers("Sonarr", "aaa")
+
+    cleanup.run_cleanup(clients, PENDING_CONFIG, state)
+
+    assert "aaa" in state["pending"]["Sonarr"]
+
+
+def test_timers_for_a_target_no_longer_configured_are_dropped():
+    clients = {"targets": [FakeTarget("Sonarr", [])], "download_client": None}
+    state = state_with_old_timers("Lidarr", "aaa")
+
+    cleanup.run_cleanup(clients, PENDING_CONFIG, state)
+
+    assert "Lidarr" not in state["pending"]

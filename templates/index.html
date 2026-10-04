@@ -59,6 +59,32 @@
   </div>
   {% endif %}
 
+  {% if waiting %}
+  <h2>Waiting on import</h2>
+  <div class="sub">
+    Finished downloads the *arr could not import on its own. Import one by hand to keep it;
+    anything still here when its wait runs out is cleaned up like a failed import.
+  </div>
+  <div class="wrap">
+    <table>
+      <thead>
+        <tr><th>Item</th><th>Warning</th><th>Target</th><th>Waited</th><th>Due in</th></tr>
+      </thead>
+      <tbody>
+        {% for item in waiting %}
+        <tr>
+          <td class="title">{{ item.title }}</td>
+          <td class="reason">{{ item.message or '—' }}</td>
+          <td class="reason">{{ item.target }}</td>
+          <td class="reason">{{ item.waited }}m</td>
+          <td class="reason">{{ item.remaining }}m</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
   <h2>Recent runs</h2>
   <div class="wrap">
     <table>

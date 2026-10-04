@@ -6,7 +6,8 @@ those as "downloading", so it will never notice them itself.
 
 `failed_import` watches the queues: the transfer finished and the *arr could not file the
 result. The torrent looks perfectly healthy at that point, so the download client has
-nothing to report.
+nothing to report. It has a slow case too — an import the *arr never gives up on, just
+leaves pending with a warning — which is only acted on after a wait.
 
 Neither detector can see the other's cases, which is why both exist.
 """
@@ -154,6 +155,80 @@ def detect_failed_imports(target, records, settings):
             )
 
     return victims
+
+
+# Where a download sits between finishing and being imported. Every healthy download passes
+# through it, which is why it cannot simply be listed as a terminal state.
+PENDING_STATE = "importpending"
+UNHAPPY = ("warning", "error")
+
+
+def detect_pending_warnings(target, records, timers, settings):
+    """
+    Queue side, the slow case. Returns (victims, waiting).
+
+    Some imports never reach a terminal state: the *arr cannot work out what the file is,
+    attaches a warning, and leaves the item in import-pending until someone imports it by
+    hand. The state alone says nothing — a healthy download sits there too for the moment
+    before it is filed — so two things have to hold together: the *arr has flagged the item,
+    and it has stayed flagged for the whole wait. `timers` holds this target's timers, keyed
+    by download.
+
+    `waiting` is how many downloads are being timed, due or not. The caller uses it to tell
+    a few bad releases from storage going away, which puts a warning on everything at once.
+    """
+    wait = settings.get("pending_warning_minutes", 0) * 60
+    if not settings.get("enabled", True) or wait <= 0:
+        # Switched off: forget the timers, so turning it back on starts from zero rather
+        # than removing things on the strength of a wait nobody was watching.
+        timers.clear()
+        return [], 0
+
+    current = {}
+    for record in records:
+        if (record.get("state") or "").replace("_", "") != PENDING_STATE:
+            continue
+        if record.get("tracked_status") not in UNHAPPY:
+            continue
+        # A season pack is one queue row per episode but a single download, and removing
+        # any one row removes them all.
+        current.setdefault(record.get("download_id") or f"queue:{record.get('id')}", record)
+
+    # Imported, fixed by hand, or gone. The timer must not survive to be picked up by an
+    # unrelated warning on the same download later.
+    for key in [key for key in timers if key not in current]:
+        del timers[key]
+
+    victims = []
+    now = now_ts()
+    for key, record in current.items():
+        messages = record.get("messages") or []
+        message = messages[0][:160] if messages else ""
+
+        entry = timers.setdefault(key, {"first_seen": now})
+        entry["title"] = record["title"]
+        entry["message"] = message
+
+        age = now - entry["first_seen"]
+        if age < wait:
+            continue
+
+        reason = f"{target.name} state: {PENDING_STATE}, warning for {age // 60}m"
+        if message:
+            reason = f"{reason} — {message}"
+        victims.append(
+            Victim(
+                record["title"],
+                reason,
+                "import_pending",
+                "failed_import",
+                record.get("download_id"),
+                target=target,
+                queue_id=record.get("id"),
+            )
+        )
+
+    return victims, len(current)
 
 
 def prune_seen(seen, current_hashes, prune_days):

@@ -48,7 +48,9 @@
         "importblocked",
         "failed",
         "downloadfailed"
-      ]
+      ],
+      "pending_warning_minutes": 120,
+      "pending_warning_limit": 10
     }
   },
   "cleanup": {

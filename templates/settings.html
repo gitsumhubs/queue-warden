@@ -47,6 +47,11 @@
   <div class="hint">Downloads that finished but the *arr could not file. The client cannot see these — the torrent looks healthy.</div>
   <div class="field"><label>Queue states treated as terminal (comma separated)</label>
     <input id="fi-states" placeholder="importblocked, failed, downloadfailed"></div>
+  <div class="row">
+    <div class="field"><label>Import pending with a warning: clean up after (minutes)</label><input id="fi-pending" type="number" min="0"></div>
+    <div class="field"><label>Hold back if more than this many are waiting</label><input id="fi-limit" type="number" min="1"></div>
+  </div>
+  <div class="hint">Import pending is also where a healthy download sits for a moment, so only items the *arr has put a warning on are timed, and the timer restarts if the warning clears. The wait is your window to import by hand; 0 turns this off. Many waiting at once usually means storage or a path rather than bad releases, so past the limit nothing is removed and the run reports an error.</div>
 </div>
 
 <h2>Cleanup</h2>
@@ -156,6 +161,8 @@ function collect() {
 
   config.detectors.failed_import.enabled = el('fi-enabled').checked;
   config.detectors.failed_import.states = splitList(el('fi-states').value);
+  config.detectors.failed_import.pending_warning_minutes = Number(el('fi-pending').value);
+  config.detectors.failed_import.pending_warning_limit = Number(el('fi-limit').value);
 
   config.cleanup.interval_minutes = Number(el('cl-interval').value);
   config.cleanup.blocklist = el('cl-blocklist').checked;
@@ -209,6 +216,8 @@ async function load() {
 
   el('fi-enabled').checked = config.detectors.failed_import.enabled !== false;
   el('fi-states').value = (config.detectors.failed_import.states || []).join(', ');
+  el('fi-pending').value = config.detectors.failed_import.pending_warning_minutes;
+  el('fi-limit').value = config.detectors.failed_import.pending_warning_limit;
 
   el('cl-interval').value = config.cleanup.interval_minutes;
   el('cl-blocklist').checked = config.cleanup.blocklist !== false;

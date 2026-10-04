@@ -119,7 +119,7 @@ WantedBy=multi-user.target
 | `warden/clients.py` | `RdtClient`, `ArrTarget`, `BookmarkarrTarget` |
 | `warden/detectors.py` | Stall detection and failed-import detection |
 | `warden/cleanup.py` | Orchestration: gather victims, claim, remove |
-| `warden/state.py` | Persisted stall streaks, run history, lifetime metrics |
+| `warden/state.py` | Persisted stall streaks, import-pending timers, run history, lifetime metrics |
 | `warden/web.py` | Flask app, JSON API, `Runtime` shared handle |
 | `warden/notify.py` | Discord/Slack webhooks |
 | `templates/index.html` | Dashboard |
@@ -173,6 +173,23 @@ kill healthy downloads on thin swarms.
 
 Completed torrents sitting at 0 B/s are seeding, not stuck, and are explicitly excluded.
 
+`importPending` is deliberately not a terminal state. Every healthy download sits there for the
+moment before it is filed, so listing it would remove good downloads mid-import. But it is also
+where an *arr parks an import it cannot do on its own — a file it cannot map to an episode, a
+download with nothing eligible in it — and those stay there until someone acts. Two things
+together tell them apart: the *arr has put a warning on the item (`trackedDownloadStatus`), and
+the warning has stood for `pending_warning_minutes`. The timer restarts whenever the warning
+clears, and a target whose queue could not be read keeps its timers rather than having an outage
+restart them.
+
+The wait alone is not enough when storage or an import path disappears, because then *every*
+finished download carries a warning. `pending_warning_limit` covers that: past the limit nothing
+is removed and the run reports an error. It counts everything being timed, not just what is due,
+since in an outage items come due a few at a time and each small batch would look reasonable.
+
+Timers are keyed by download rather than by queue row. A season pack is one row per episode but a
+single download, and removing any one row removes them all.
+
 Bookmarkarr reports `blocklisted` in its response body separately from the HTTP status. A torrent
 client answers a delete for an unknown hash with success, so status alone cannot tell the caller
 whether the release was actually recognised. Queue Warden keys off that flag, and treats a `false`
@@ -184,6 +201,17 @@ file that the next start would discard. A corrupt state file is discarded with a
 than being fatal: it costs stall streaks and history, not correctness.
 
 ## Troubleshooting
+
+**An import that needs manual attention is never removed.** Check the dashboard's "Waiting on
+import" list. An item only appears there while the *arr shows it as import pending *with a
+warning*; without the warning it is treated as a healthy download about to be filed. If it is
+listed, it is removed when "Due in" reaches zero — the timer restarts if the warning clears in
+between. `pending_warning_minutes: 0` turns the rule off entirely.
+
+**The run reports `import pending: N downloads are waiting with a warning, over the limit`.** That
+many at once usually means the download or media path is unreachable from the *arr, not that the
+releases are bad, so nothing was removed. Fix the path and the warnings clear on their own. If
+they really are separate bad releases, raise `pending_warning_limit`.
 
 **Nothing is ever removed.** Check `/api/status` for `targets` — an empty list means no target had
 both a url and an api key. Unconfigured targets are skipped silently by design.

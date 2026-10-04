@@ -16,6 +16,7 @@ from . import (
     cleanup as cleanup_module,
     clients as clients_module,
     config as config_module,
+    detectors,
     logbuffer,
     notify,
     state as state_module,
@@ -29,6 +30,32 @@ log = logging.getLogger("warden")
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates")
 
 
+def _waiting(runtime):
+    """
+    Downloads currently being timed by the import-pending rule, soonest first.
+
+    Shown on the dashboard because the wait is also the window to import something by hand,
+    and that is only usable if it is visible before the item is removed rather than after.
+    """
+    wait = runtime.config["detectors"]["failed_import"].get("pending_warning_minutes", 0)
+    now = detectors.now_ts()
+    rows = []
+    # Copied before iterating: a pass on the scheduler thread adds and drops timers.
+    for target, timers in list(runtime.state.get("pending", {}).items()):
+        for entry in list(timers.values()):
+            waited = (now - entry.get("first_seen", now)) // 60
+            rows.append(
+                {
+                    "target": target,
+                    "title": entry.get("title", ""),
+                    "message": entry.get("message", ""),
+                    "waited": waited,
+                    "remaining": max(0, wait - waited),
+                }
+            )
+    return sorted(rows, key=lambda row: row["remaining"])
+
+
 def create_app(runtime):
     """`runtime` carries the live config, clients, state, and scheduler."""
     app = Flask(__name__, template_folder=TEMPLATE_DIR)
@@ -40,6 +67,7 @@ def create_app(runtime):
             metrics=runtime.state["metrics"],
             runs=runtime.state["runs"][:20],
             history=runtime.state["history"][:50],
+            waiting=_waiting(runtime),
             targets=[target.name for target in runtime.clients["targets"]],
             config=runtime.config,
             next_run=runtime.scheduler.next_run,
@@ -56,6 +84,7 @@ def create_app(runtime):
             by_detector=metrics.get("by_detector", {}),
             by_target=metrics.get("by_target", {}),
             last_error=metrics.get("last_error"),
+            waiting_on_import=len(_waiting(runtime)),
             targets=[target.name for target in runtime.clients["targets"]],
             dry_run=runtime.config["cleanup"].get("dry_run", False),
         )

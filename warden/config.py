@@ -42,6 +42,13 @@ DEFAULT_CONFIG = {
         "failed_import": {
             "enabled": True,
             "states": ["importblocked", "failed", "downloadfailed"],
+            # Import-pending is not in the list above because every healthy download passes
+            # through it. It only counts when the *arr has put a warning on the item and the
+            # warning has stood for this long. 0 turns the rule off.
+            "pending_warning_minutes": 120,
+            # More than this many waiting at once points at storage or an import path, not
+            # at the releases, so nothing is removed and the run reports an error instead.
+            "pending_warning_limit": 10,
         },
     },
     "cleanup": {
@@ -166,6 +173,14 @@ def normalise(raw):
     stalled = config.get("detectors", {}).get("stalled", {})
     if stalled.get("stuck_min_streak", 1) < 1:
         errors.append("Stuck streak must be at least 1 — a single reading is normal for a healthy torrent")
+
+    failed_import = config.get("detectors", {}).get("failed_import", {})
+    wait = failed_import.get("pending_warning_minutes")
+    if not isinstance(wait, int) or wait < 0:
+        errors.append("Import-pending wait must be a whole number of minutes, or 0 to turn it off")
+    limit = failed_import.get("pending_warning_limit")
+    if not isinstance(limit, int) or limit < 1:
+        errors.append("Import-pending limit must be a whole number, at least 1")
 
     return config, errors
 

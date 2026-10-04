@@ -33,6 +33,56 @@ def _index_queues(targets):
     return queues, errors
 
 
+def _pending_warnings(queues, targets, state, settings, errors):
+    """
+    Imports that have sat in import-pending with a warning for the whole configured wait.
+
+    Timers are kept per target, so a target whose queue could not be read this pass keeps
+    its timers as they were instead of having an outage restart them.
+    """
+    timers = state.setdefault("pending", {})
+
+    # A target dropped from the config would otherwise leave its timers behind for good.
+    names = {target.name for target in targets}
+    for name in [name for name in timers if name not in names]:
+        del timers[name]
+
+    wait = settings.get("pending_warning_minutes", 0)
+    due = []
+    waiting = 0
+    for target, records in queues:
+        known = timers.setdefault(target.name, {})
+        before = set(known)
+        found, count = detectors.detect_pending_warnings(target, records, known, settings)
+        due.extend(found)
+        waiting += count
+
+        # Said once, when the timer starts, so there is a window to import it by hand.
+        for key in set(known) - before:
+            log.info(
+                "[%s] import pending with a warning: %s — cleaned up in %dm unless it imports (%s)",
+                target.name,
+                known[key]["title"],
+                wait,
+                known[key]["message"] or "no reason given",
+            )
+
+    # Counted across everything being timed, not just what is due: when storage or an import
+    # path goes away every finished download gets a warning, but they come due a few at a
+    # time, and each small batch would look reasonable on its own.
+    limit = settings.get("pending_warning_limit", 10)
+    if due and waiting > limit:
+        message = (
+            f"import pending: {waiting} downloads are waiting with a warning, over the limit of "
+            f"{limit} — nothing removed, check storage and import paths"
+        )
+        log.error(message)
+        errors.append(message)
+        return []
+
+    return due
+
+
 def _claim(victim, queues):
     """
     Finds the target holding this torrent, and the queue id to remove it by.
@@ -74,6 +124,9 @@ def run_cleanup(clients, config, state, force_stuck=False):
     # Queue side: things the *arrs have already given up on.
     for target, records in queues:
         victims.extend(detectors.detect_failed_imports(target, records, settings["failed_import"]))
+
+    # Queue side, the slow case: finished, flagged by the *arr, and still sitting there.
+    victims.extend(_pending_warnings(queues, targets, state, settings["failed_import"], errors))
 
     # Download-client side: things that are not moving.
     torrents = []

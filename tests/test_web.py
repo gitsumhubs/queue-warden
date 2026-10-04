@@ -139,3 +139,16 @@ def test_logs_can_be_cleared(client):
     client.post("/api/logs/clear")
 
     assert json.loads(client.get("/api/logs").data)["logs"] == []
+
+
+def test_dashboard_lists_downloads_waiting_on_import(client, runtime):
+    # The wait is the window to import by hand, so it has to be visible before removal.
+    runtime.state["pending"] = {
+        "Sonarr": {"aaa": {"first_seen": 0, "title": "Stuck Show", "message": "No files found"}}
+    }
+
+    body = client.get("/").data.decode()
+
+    assert "Waiting on import" in body
+    assert "Stuck Show" in body
+    assert json.loads(client.get("/api/status").data)["waiting_on_import"] == 1

@@ -177,3 +177,26 @@ def test_download_client_without_url_is_disabled(tmp_path):
     path = write(tmp_path, {"download_client": {"url": "", "username": "u", "password": "p"}})
 
     assert config_module.load_config(path)["download_client"]["enabled"] is False
+
+
+def test_a_config_written_before_the_import_pending_rule_gains_its_defaults(tmp_path):
+    # An upgrade must not need a config edit to behave sensibly.
+    path = write(tmp_path, {"detectors": {"failed_import": {"states": ["failed"]}}})
+
+    failed_import = config_module.load_config(path)["detectors"]["failed_import"]
+
+    assert failed_import["states"] == ["failed"]
+    assert failed_import["pending_warning_minutes"] == 120
+    assert failed_import["pending_warning_limit"] == 10
+
+
+def test_import_pending_settings_are_validated():
+    _, errors = config_module.normalise(
+        {"detectors": {"failed_import": {"pending_warning_minutes": -5, "pending_warning_limit": 0}}}
+    )
+
+    assert len(errors) == 2
+
+    _, errors = config_module.normalise({"detectors": {"failed_import": {"pending_warning_minutes": 0}}})
+
+    assert errors == []

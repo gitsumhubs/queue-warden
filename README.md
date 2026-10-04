@@ -109,6 +109,15 @@ pip install pytest && python -m pytest tests/ -q
 - **Failed-import detection** — removes queue items the *arr has already given up on
   (`importBlocked`, `failed`, `downloadFailed`). Anything still queued, downloading, or importing
   is left alone.
+- **Stuck-import detection** — some imports never fail outright: the *arr cannot work out what the
+  file is, puts a warning on it, and leaves it in `importPending` until someone imports it by
+  hand. These are removed once the warning has stood for a configurable wait (2 hours by default).
+  A healthy download passes through `importPending` too, so an item with no warning is never
+  timed, and the timer restarts if the warning clears. The dashboard lists what is waiting and
+  when it is due, so there is time to import something by hand first.
+- **Storage-outage guard** — when storage or an import path goes away, every finished download
+  picks up a warning at once. If more than a set number are waiting (10 by default), none are
+  removed and the run reports an error instead.
 - **Blocklist and re-search** — removal goes through the owning *arr with `blocklist=true`, so the
   release is recorded as bad and a different one is grabbed.
 - **Any number of targets** — Sonarr, Radarr, Lidarr, Readarr, and Bookmarkarr are config entries,
@@ -126,7 +135,7 @@ pip install pytest && python -m pytest tests/ -q
 | `targets[]` | One entry per *arr: `name`, `flavour` (`arr` or `bookmarkarr`), `url`, `api_key`, `enabled` |
 | `download_client` | `url`, `username`, `password`; set `enabled: false` to run queue-side only |
 | `detectors.stalled` | `states`, `stuck_min_age_minutes`, `stuck_min_streak` |
-| `detectors.failed_import` | `states` to treat as terminal |
+| `detectors.failed_import` | `states` to treat as terminal; `pending_warning_minutes` (default 120, 0 turns it off) and `pending_warning_limit` (default 10) for imports left pending with a warning |
 | `cleanup.interval_minutes` | How often a pass runs (default 5) |
 | `cleanup.blocklist` | Whether removal also blocklists (default true) |
 | `cleanup.dry_run` | Report only, remove nothing |
@@ -150,7 +159,7 @@ need a config file edit as well. See RECREATE.md for the full list.
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /api/status` | Last run, next run, lifetime metrics, configured targets |
+| `GET /api/status` | Last run, next run, lifetime metrics, configured targets, downloads waiting on import |
 | `GET /api/runs?limit=20` | Recent run summaries |
 | `GET /api/history?limit=50` | Recently removed items with reasons |
 | `GET /api/test/<name>` | Connection test for one target |
@@ -158,6 +167,11 @@ need a config file edit as well. See RECREATE.md for the full list.
 | `POST /clear-error` | Dismiss the last recorded error |
 
 ## Notes
+
+Upgrading from 0.1.x turns stuck-import detection on with its defaults, because a config file
+written before the rule existed inherits them. Set the wait to 0 on the Settings page to keep the
+old behaviour. Nothing is removed during the first wait, and the dashboard shows what is being
+timed.
 
 Bookmarkarr needs **0.1.17 or newer**, which is the release that added
 `DELETE /api/v1/download/queue/{id}?blocklist=true`. Against older versions the call is accepted
