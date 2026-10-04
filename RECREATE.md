@@ -208,3 +208,9 @@ overrides now; if this reappears, check `_env()` in `warden/config.py`.
 **Targets cannot be reached from inside the container.** `localhost` means the container. Use
 `host.docker.internal` for services on the Docker host, or the container name for services on a
 shared Docker network. The Test button on the Settings page confirms it immediately.
+
+**One target returns `400 Bad Request` while the others work.** The *arr is rejecting the hostname
+in the request, not the request itself — its response body reads "Invalid Hostname". This happens
+when the *arr restricts which hostnames it answers to (`AllowedHosts` in its `config.xml`) and the
+target url uses a name outside that list, typically `host.docker.internal`. Point the target at an
+address the *arr allows, or add the hostname to its list.
