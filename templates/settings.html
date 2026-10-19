@@ -87,26 +87,38 @@
 </div>
 
 <script>
-const FLAVOURS = {{ flavours | tojson }};
+// Sonarr and Radarr both speak the *arr API, so both map to the "arr" flavour. The labels are
+// only for the dropdown and the URL hint.
+const TYPES = [
+  { label: 'Sonarr', flavour: 'arr', placeholder: 'http://sonarrIP:8989' },
+  { label: 'Radarr', flavour: 'arr', placeholder: 'http://radarrIP:7878' },
+  { label: 'Bookmarkarr', flavour: 'bookmarkarr', placeholder: 'http://bookmarkarrIP:5000' },
+];
 let config = null;
 
 function el(id) { return document.getElementById(id); }
 
+function typeIndex(target) {
+  if (target.flavour === 'bookmarkarr') return 2;
+  return /radarr/i.test(target.name || '') ? 1 : 0;
+}
+
 function targetRow(target, index) {
-  const options = FLAVOURS.map(f =>
-    `<option value="${f}" ${target.flavour === f ? 'selected' : ''}>${f === 'arr' ? 'Sonarr-compatible' : 'Bookmarkarr'}</option>`
+  const selected = typeIndex(target);
+  const options = TYPES.map((type, i) =>
+    `<option value="${i}" ${i === selected ? 'selected' : ''}>${type.label}</option>`
   ).join('');
   return `
     <div class="card target" data-index="${index}">
       <div class="row">
         <div class="field"><label>Name</label><input class="t-name" value="${target.name || ''}"></div>
-        <div class="field"><label>Type</label><select class="t-flavour">${options}</select></div>
+        <div class="field"><label>Type</label><select class="t-type" onchange="typeChanged(this)">${options}</select></div>
       </div>
-      <div class="field"><label>URL</label><input class="t-url" value="${target.url || ''}"></div>
+      <div class="field"><label>URL</label><input class="t-url" value="${target.url || ''}" placeholder="${TYPES[selected].placeholder}"></div>
       <div class="field"><label>API key</label><input class="t-key" type="password" value="${target.api_key || ''}"></div>
       <label class="check"><input class="t-enabled" type="checkbox" ${target.enabled !== false ? 'checked' : ''}> Enabled</label>
       <div class="actions" style="margin-top:.75rem">
-        <button class="secondary" type="button" onclick="testTarget('${(target.name || '').replace(/'/g, "")}')">Test</button>
+        <button class="secondary" type="button" onclick="testTarget(this)">Test</button>
         <button class="secondary" type="button" onclick="removeTarget(${index})">Remove</button>
         <span class="test-result reason"></span>
       </div>
@@ -128,17 +140,30 @@ function removeTarget(index) {
   renderTargets();
 }
 
-async function testTarget(name) {
-  const row = [...document.querySelectorAll('.target')]
-    .find(node => node.querySelector('.t-name').value === name);
-  const out = row ? row.querySelector('.test-result') : null;
-  if (out) out.textContent = 'testing…';
+function typeChanged(select) {
+  select.closest('.target').querySelector('.t-url').placeholder = TYPES[select.value].placeholder;
+}
+
+// Tests what is on the form right now, so it works before Save.
+async function testTarget(button) {
+  const row = button.closest('.target');
+  const out = row.querySelector('.test-result');
+  out.textContent = 'testing…';
   try {
-    const response = await fetch(`/api/test/${encodeURIComponent(name)}`);
+    const response = await fetch('/api/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: row.querySelector('.t-name').value.trim(),
+        flavour: TYPES[row.querySelector('.t-type').value].flavour,
+        url: row.querySelector('.t-url').value.trim(),
+        api_key: row.querySelector('.t-key').value.trim(),
+      }),
+    });
     const body = await response.json();
-    if (out) out.textContent = body.message;
+    out.textContent = body.message;
   } catch (error) {
-    if (out) out.textContent = String(error);
+    out.textContent = String(error);
   }
 }
 
@@ -149,7 +174,7 @@ function splitList(value) {
 function collect() {
   config.targets = [...document.querySelectorAll('.target')].map(row => ({
     name: row.querySelector('.t-name').value.trim(),
-    flavour: row.querySelector('.t-flavour').value,
+    flavour: TYPES[row.querySelector('.t-type').value].flavour,
     url: row.querySelector('.t-url').value.trim(),
     api_key: row.querySelector('.t-key').value.trim(),
     enabled: row.querySelector('.t-enabled').checked,

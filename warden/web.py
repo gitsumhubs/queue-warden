@@ -128,16 +128,25 @@ def create_app(runtime):
     def history():
         return jsonify(history=runtime.state["history"][: int(request.args.get("limit", 50))])
 
-    @app.route("/api/test/<name>")
-    def test_target(name):
-        for target in runtime.clients["targets"]:
-            if target.name.lower() == name.lower():
-                try:
-                    target.ping()
-                    return jsonify(success=True, message=f"{target.name} connected")
-                except Exception as error:  # noqa: BLE001
-                    return jsonify(success=False, message=str(error)), 502
-        return jsonify(success=False, message=f"No target named {name}"), 404
+    @app.route("/api/test", methods=["POST"])
+    def test_target():
+        # Tests the values typed into the Settings form, so a target can be checked before it is
+        # saved. Nothing is written or applied to the running clients.
+        data = request.get_json(silent=True) or {}
+        flavour = data.get("flavour")
+        url = (data.get("url") or "").strip()
+        api_key = (data.get("api_key") or "").strip()
+        label = (data.get("name") or "").strip() or flavour
+        if flavour not in config_module.FLAVOURS:
+            return jsonify(success=False, message="Choose a type first"), 400
+        if not url or not api_key:
+            return jsonify(success=False, message="URL and API key are required"), 400
+        target = clients_module.target_class(flavour)(label, url, api_key)
+        try:
+            target.ping()
+        except Exception as error:  # noqa: BLE001
+            return jsonify(success=False, message=str(error)), 502
+        return jsonify(success=True, message=f"{label} connected")
 
     @app.route("/run", methods=["POST"])
     def run_now():
@@ -154,7 +163,6 @@ def create_app(runtime):
             "settings.html",
             config=runtime.config,
             targets=runtime.config.get("all_targets", runtime.config["targets"]),
-            flavours=config_module.FLAVOURS,
             saved=request.args.get("saved") == "1",
         )
 

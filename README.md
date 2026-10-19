@@ -188,7 +188,7 @@ need a config file edit as well. See RECREATE.md for the full list.
 | `GET /api/logs?source=rdt` | Tail of the imported RDT log archive |
 | `GET /logs/rdt-archive` | Download the complete imported RDT log |
 | `GET /logs/current` | Download the current persisted Queue Warden log |
-| `GET /api/test/<name>` | Connection test for one target |
+| `POST /api/test` | Connection test for a target's type, URL, and API key (`{"flavour", "url", "api_key"}`); nothing is saved |
 | `POST /run` | Trigger a pass (`dry_run=1`, `force_stuck=1`) |
 | `POST /clear-error` | Dismiss the last recorded error |
 | `POST /api/fast-mode` | Toggle the temporary 30-second scheduler with `{"enabled": true}` |

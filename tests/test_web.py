@@ -113,6 +113,53 @@ def test_settings_keeps_unusable_targets_for_editing(client, runtime):
     assert len(json.loads(client.get("/api/config").data)["targets"]) == 2
 
 
+def test_test_endpoint_checks_form_values_without_saving(client, runtime, tmp_path, monkeypatch):
+    pinged = {}
+
+    def fake_ping(self):
+        pinged["url"], pinged["key"] = self.url, self.api_key
+        return True
+
+    monkeypatch.setattr(web.clients_module.ArrTarget, "ping", fake_ping)
+    response = client.post(
+        "/api/test",
+        json={"name": "Sonarr", "flavour": "arr", "url": "http://sonarrIP:8989/", "api_key": "typed"},
+    )
+
+    assert response.get_json() == {"success": True, "message": "Sonarr connected"}
+    assert pinged == {"url": "http://sonarrIP:8989", "key": "typed"}
+    # Testing must not save anything or touch the running clients.
+    assert not (tmp_path / "config.json").exists()
+    assert runtime.clients["targets"] == []
+
+
+def test_test_endpoint_uses_bookmarkarr_client_for_bookmarkarr(client, monkeypatch):
+    monkeypatch.setattr(web.clients_module.BookmarkarrTarget, "ping", lambda self: True)
+    body = client.post(
+        "/api/test", json={"name": "Bookmarkarr", "flavour": "bookmarkarr", "url": "http://b:5000", "api_key": "k"}
+    ).get_json()
+    assert body["success"] is True
+
+
+def test_test_endpoint_reports_unreachable_target(client, monkeypatch):
+    def fail(self):
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr(web.clients_module.ArrTarget, "ping", fail)
+    response = client.post("/api/test", json={"flavour": "arr", "url": "http://x", "api_key": "k"})
+    assert response.status_code == 502
+    assert "connection refused" in response.get_json()["message"]
+
+
+def test_test_endpoint_asks_for_url_key_and_type(client):
+    missing_key = client.post("/api/test", json={"flavour": "arr", "url": "http://x", "api_key": ""})
+    assert missing_key.status_code == 400
+    assert "API key" in missing_key.get_json()["message"]
+
+    bad_type = client.post("/api/test", json={"flavour": "nope", "url": "http://x", "api_key": "k"})
+    assert bad_type.status_code == 400
+
+
 def test_log_endpoint_returns_recent_lines(client):
     logbuffer.install()
     logging.getLogger("warden").warning("a distinctive log line")

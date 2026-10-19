@@ -322,7 +322,9 @@ overrides now; if this reappears, check `_env()` in `warden/config.py`.
 
 **Targets cannot be reached from inside the container.** `localhost` means the container. Use
 `host.docker.internal` for services on the Docker host, or the container name for services on a
-shared Docker network. The Test button on the Settings page confirms it immediately.
+shared Docker network. The Test button on the Settings page confirms it immediately. It tests the
+URL and API key currently typed into the form, so a target can be checked before Save; nothing is
+saved by testing.
 
 **One target returns `400 Bad Request` while the others work.** The *arr is rejecting the hostname
 in the request, not the request itself — its response body reads "Invalid Hostname". This happens

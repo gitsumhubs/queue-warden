@@ -205,11 +205,15 @@ class BookmarkarrTarget:
             return False
 
 
+def target_class(flavour):
+    return BookmarkarrTarget if flavour == "bookmarkarr" else ArrTarget
+
+
 def build_targets(config):
     """Instantiates one client per configured target, preserving config order."""
     targets = []
     for entry in config["targets"]:
-        cls = BookmarkarrTarget if entry["flavour"] == "bookmarkarr" else ArrTarget
+        cls = target_class(entry["flavour"])
         targets.append(cls(entry["name"], entry["url"], entry["api_key"]))
     return targets
 
