@@ -229,6 +229,10 @@ removable, and the alternative is a service that starts deleting and blocklistin
 credentials are filled in. An existing config file keeps whatever it already says, so this only
 affects fresh installs.
 
+**Run now follows `cleanup.dry_run`.** Only the Dry run button forces a dry run. The `/run` route
+passes `None` when the form has no `dry_run` field; passing `False` would override the config and
+remove items for real.
+
 Both `DRY_RUN` and `QUEUE_WARDEN_DRY_RUN` are read. The compose file maps the prefixed name down
 to the bare one, but anyone writing their own compose sets the prefixed name directly in
 `environment:` — silently ignoring it would hand them a live daemon when they explicitly asked for
