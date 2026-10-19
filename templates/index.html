@@ -91,6 +91,24 @@
   </div>
   {% endif %}
 
+  <h2>rdtclient restart</h2>
+  <div class="sub">
+    {% if not rdt.enabled %}Restarting rdtclient for stuck downloads is off. Turn it on with <code>detectors.rdt_stuck.enabled</code> in config.json.
+    {% else %}rdtclient is restarted only when downloads sit waiting for Real-Debrid and nothing else is transferring.{% endif %}
+  </div>
+  {% if rdt.enabled %}
+  <div class="card">
+    <div class="reason">Last restart: {{ rdt.last_restart or 'never' }}{% if rdt.pending %} &middot; recheck pending{% endif %}</div>
+    {% if rdt.last_result %}
+    <div class="reason">Last result: <strong>{{ rdt.last_result.result }}</strong> &mdash; {{ rdt.last_result.message }}
+      <span class="reason">({{ rdt.last_result.timestamp[:19]|replace('T', ' ') }})</span></div>
+    {% endif %}
+    <form action="/rdt-check" method="post" style="margin-top:.6rem">
+      <button class="secondary" type="submit">Check rdtclient now</button>
+    </form>
+  </div>
+  {% endif %}
+
   <h2>Completed download cleanup</h2>
   <div class="sub">
     {% if not config.detectors.finished.enabled %}Completed cleanup is disabled.

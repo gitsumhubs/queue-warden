@@ -48,6 +48,8 @@ from the target's `name`, upper-cased with hyphens as underscores.
 | BOOKMARKARR_API_KEY | No | - | Overrides the Bookmarkarr target api key |
 | DOWNLOAD_CLIENT_URL | No | - | Download client base url |
 | DOWNLOAD_CLIENT_USERNAME | No | - | Download client username |
+| RESTART_SERVICE_TOKEN | Only for rdtclient restart | - | Shared secret. Set the same value in `.env`; restart-service refuses to start without it. Generate with `openssl rand -hex 32` |
+| RESTART_SERVICE_URL | No | http://restart-service:8080 | Where Queue Warden reaches restart-service |
 | DOWNLOAD_CLIENT_PASSWORD | No | - | Download client password |
 | CLEANUP_INTERVAL_MINUTES | No | 5 | Minutes between passes |
 | FINISHED_CLEANUP_ENABLED | No | true | Enable completed torrent/file cleanup |
@@ -143,6 +145,8 @@ WantedBy=multi-user.target
 | `warden/config.py` | Defaults, file load, env overrides, target validation |
 | `warden/clients.py` | `RdtClient`, `ArrTarget`, `BookmarkarrTarget` |
 | `warden/detectors.py` | Stall detection and failed-import detection |
+| `warden/rdt_restart.py` | rdtclient stuck-download detection, restart, and recheck (`rdt_stuck`) |
+| `restart-service/app.py` | Internal Flask service, the only container with Docker socket access; restarts allowlisted containers |
 | `warden/cleanup.py` | Orchestration: gather victims, claim, remove |
 | `warden/state.py` | Persisted stall streaks, import-pending timers, run history, lifetime metrics |
 | `warden/web.py` | Flask app, JSON API, `Runtime` shared handle |

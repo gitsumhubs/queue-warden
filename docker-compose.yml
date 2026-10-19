@@ -26,6 +26,9 @@ services:
       - RDT_CLIENT_USERNAME=${RDT_CLIENT_USERNAME:-}
       - RDT_CLIENT_PASSWORD=${RDT_CLIENT_PASSWORD:-}
       - RDT_LOG_ARCHIVE=/app/archive/rdt-cleanup.log
+      # Must match restart-service's RESTART_TOKEN. Set it in .env; generate with: openssl rand -hex 32
+      - RESTART_SERVICE_TOKEN=${RESTART_SERVICE_TOKEN:-}
+      - RESTART_SERVICE_URL=${RESTART_SERVICE_URL:-}
     ports:
       - "${QUEUE_WARDEN_PORT:-3020}:3020"
     # Lets the container reach *arrs and the download client running on the host.
@@ -42,4 +45,18 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    restart: unless-stopped
+    depends_on:
+      - restart-service
+
+  # The only container with Docker access. It restarts allowlisted containers and nothing else.
+  # No host port is published; Queue Warden reaches it at restart-service:8080 on this network.
+  restart-service:
+    image: queue-warden-restart-service:local
+    build: ./restart-service
+    container_name: queue-warden-restart-service
+    environment:
+      - RESTART_TOKEN=${RESTART_SERVICE_TOKEN:?set RESTART_SERVICE_TOKEN in .env}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped

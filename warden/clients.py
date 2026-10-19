@@ -223,3 +223,30 @@ def build_download_client(config):
     if not client.get("enabled"):
         return None
     return RdtClient(client["url"], client.get("username", ""), client.get("password", ""))
+
+
+class RestartServiceClient:
+    """Asks restart-service to restart one allowlisted container. It holds the only Docker access."""
+
+    def __init__(self, url, token):
+        self.url = (url or "").rstrip("/")
+        self.token = token or ""
+
+    def restart(self, container):
+        response = requests.post(
+            f"{self.url}/restart/{container}",
+            headers={"X-Restart-Token": self.token},
+            timeout=TIMEOUT,
+        )
+        try:
+            body = response.json() or {}
+        except ValueError:
+            body = {}
+        if response.status_code != 200 or not body.get("success"):
+            raise RuntimeError(body.get("message") or f"restart service returned {response.status_code}")
+        return body
+
+
+def build_restart_service(config):
+    service = config["restart_service"]
+    return RestartServiceClient(service["url"], service["token"])

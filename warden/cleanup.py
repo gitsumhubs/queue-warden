@@ -10,7 +10,7 @@ just means the same bad release is picked again on the next search.
 import logging
 import time
 
-from . import detectors, state as state_module
+from . import detectors, rdt_restart, state as state_module
 from .config import FLAVOURS
 
 log = logging.getLogger("warden")
@@ -138,8 +138,13 @@ def run_cleanup(clients, config, state, force_stuck=False):
             if download_client.session is None:
                 download_client.login()
             torrents = download_client.list_torrents()
+            # With rdtclient recovery on, torrents waiting for Real-Debrid are its to restart, not
+            # the stalled detector's to delete after ten minutes.
+            stalled_input = torrents
+            if settings.get("rdt_stuck", {}).get("enabled", False):
+                stalled_input = [torrent for torrent in torrents if not rdt_restart.is_waiting(torrent)]
             victims.extend(
-                detectors.detect_stalled(torrents, state["seen"], settings["stalled"], force_stuck)
+                detectors.detect_stalled(stalled_input, state["seen"], settings["stalled"], force_stuck)
             )
         except Exception as error:  # noqa: BLE001
             client_read_failed = True

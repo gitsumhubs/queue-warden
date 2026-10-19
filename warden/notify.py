@@ -35,8 +35,11 @@ def notify_run(config, deleted, errors):
     if errors:
         lines.append(f"\n{len(errors)} error(s): " + "; ".join(errors[:3]))
 
-    message = "\n".join(lines)
+    notify_message(config, "\n".join(lines))
 
+
+def notify_message(config, message):
+    settings = config["notifications"]
     if settings.get("discord_webhook"):
         _post(settings["discord_webhook"], {"content": message[:1900]})
     if settings.get("slack_webhook"):

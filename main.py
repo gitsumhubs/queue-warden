@@ -120,6 +120,7 @@ def main():
     active = {
         "targets": clients_module.build_targets(config),
         "download_client": clients_module.build_download_client(config),
+        "restart_service": clients_module.build_restart_service(config),
     }
 
     log.info("Queue Warden starting")

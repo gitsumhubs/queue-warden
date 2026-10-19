@@ -189,9 +189,25 @@ need a config file edit as well. See RECREATE.md for the full list.
 | `GET /logs/rdt-archive` | Download the complete imported RDT log |
 | `GET /logs/current` | Download the current persisted Queue Warden log |
 | `POST /api/test` | Connection test for a target's type, URL, and API key (`{"flavour", "url", "api_key"}`); nothing is saved |
+| `POST /rdt-check` | Run the rdtclient stuck-download check now, honouring dry run |
 | `POST /run` | Trigger a pass (`dry_run=1`, `force_stuck=1`) |
 | `POST /clear-error` | Dismiss the last recorded error |
 | `POST /api/fast-mode` | Toggle the temporary 30-second scheduler with `{"enabled": true}` |
+
+## rdtclient stuck downloads
+
+Off by default (`detectors.rdt_stuck.enabled`). rdtclient resolves each torrent through Real-Debrid
+before it has a size. A torrent that stays at size 1 with no progress or speed for an hour (the
+default) means rdtclient has stopped resolving it. Queue Warden then asks **restart-service** to
+restart `rdtclient`, but only when nothing else is downloading, since a restart interrupts every
+transfer. After five minutes it rechecks and reports `recovered`, `unchanged`, or `error` on the
+dashboard and in notifications. A cooldown (60 minutes by default) prevents restart loops.
+
+Only restart-service has Docker access, so a bug in Queue Warden cannot control containers. Set
+`RESTART_SERVICE_TOKEN` in `.env` to the same value for both services.
+
+When this is on, the stalled detector leaves waiting torrents alone, so they are not deleted after
+ten minutes before the hour is up.
 
 ## Migrating RDT Cleanup
 

@@ -24,6 +24,8 @@ def _empty():
         "pending": {},
         "finished": [],
         "finished_seen": {},
+        # rdtclient stuck-download recovery: per-hash clocks, the last restart, and the recheck.
+        "rdt_restart": {"seen": {}, "last_restart": None, "pending": None, "last_result": None},
         "history": [],
         "runs": [],
         "metrics": {

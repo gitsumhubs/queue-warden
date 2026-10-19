@@ -6,6 +6,7 @@ lifetime metrics, per-target connection tests, and a manual trigger — includin
 a pass can be inspected before anything is actually removed.
 """
 
+from datetime import datetime
 import logging
 import os
 import threading
@@ -18,6 +19,7 @@ from . import (
     config as config_module,
     detectors,
     logbuffer,
+    rdt_restart,
     logarchive,
     notify,
     state as state_module,
@@ -72,6 +74,17 @@ def _finished(runtime):
     return sorted(rows, key=lambda row: row["remaining"])
 
 
+def _rdt_status(runtime):
+    rs = runtime.state.get("rdt_restart", {})
+    last = rs.get("last_restart")
+    return {
+        "enabled": runtime.config["detectors"]["rdt_stuck"].get("enabled", False),
+        "last_restart": datetime.fromtimestamp(last).strftime("%Y-%m-%d %H:%M") if last else None,
+        "last_result": rs.get("last_result"),
+        "pending": bool(rs.get("pending")),
+    }
+
+
 def create_app(runtime):
     """`runtime` carries the live config, clients, state, and scheduler."""
     app = Flask(__name__, template_folder=TEMPLATE_DIR)
@@ -85,6 +98,7 @@ def create_app(runtime):
             history=runtime.state["history"][:50],
             waiting=_waiting(runtime),
             finished=_finished(runtime),
+            rdt=_rdt_status(runtime),
             targets=[target.name for target in runtime.clients["targets"]],
             config=runtime.config,
             next_run=runtime.scheduler.next_run,
@@ -148,6 +162,12 @@ def create_app(runtime):
             return jsonify(success=False, message=str(error)), 502
         return jsonify(success=True, message=f"{label} connected")
 
+    @app.route("/rdt-check", methods=["POST"])
+    def rdt_check():
+        # Backgrounded like /run; the check can wait on a slow restart-service.
+        threading.Thread(target=runtime.run_rdt_check, daemon=True).start()
+        return redirect("/")
+
     @app.route("/run", methods=["POST"])
     def run_now():
         # Backgrounded so the button returns immediately; a full pass can take a while when
@@ -170,6 +190,7 @@ def create_app(runtime):
     def get_config():
         config = {key: value for key, value in runtime.config.items() if key != "all_targets"}
         config["targets"] = runtime.config.get("all_targets", runtime.config["targets"])
+        config["restart_service"] = {k: v for k, v in config["restart_service"].items() if k != "token"}
         return jsonify(config)
 
     @app.route("/api/config", methods=["POST"])
@@ -281,6 +302,7 @@ class Runtime:
             self.clients = {
                 "targets": clients_module.build_targets(config),
                 "download_client": clients_module.build_download_client(config),
+                "restart_service": clients_module.build_restart_service(config),
             }
             if self.scheduler is not None:
                 self.scheduler.set_interval(config["cleanup"]["interval_minutes"])
@@ -289,6 +311,34 @@ class Runtime:
                 "Settings saved — targets: %s",
                 ", ".join(t.name for t in self.clients["targets"]) or "none",
             )
+
+    def _rdt_check(self):
+        """One rdtclient check. The caller holds the run lock and decides when to save."""
+        return rdt_restart.check(
+            self.config["detectors"]["rdt_stuck"],
+            self.state,
+            self.clients.get("download_client"),
+            self.clients.get("restart_service"),
+            dry_run=self.config["cleanup"].get("dry_run", False),
+            notify=lambda message: notify.notify_message(self.config, message),
+        )
+
+    def _check_rdt(self):
+        # Kept out of the cleanup path: a failing rdtclient must not stop cleanup, and its errors
+        # are recorded by the check itself.
+        try:
+            self._rdt_check()
+        except Exception as error:  # noqa: BLE001
+            log.exception("rdtclient check failed")
+            state_module.record_error(self.state, f"rdtclient check failed: {error}")
+
+    def run_rdt_check(self):
+        """The manual "Check rdtclient now" button. Same check as the scheduled one, run now."""
+        with self._lock:
+            try:
+                return self._rdt_check()
+            finally:
+                state_module.save(self.state_path, self.state)
 
     def run_once(self, force_stuck=False, dry_run=None):
         # Serialised: two overlapping passes would both see the same victims and the second
@@ -303,6 +353,7 @@ class Runtime:
                 )
                 if errors:
                     state_module.record_error(self.state, "; ".join(errors[:3]))
+                self._check_rdt()
                 notify.notify_run(self.config, deleted, errors)
                 return deleted, errors
             except Exception as error:  # noqa: BLE001

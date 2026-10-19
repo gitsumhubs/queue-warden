@@ -52,6 +52,15 @@ DEFAULT_CONFIG = {
             # at the releases, so nothing is removed and the run reports an error instead.
             "pending_warning_limit": 10,
         },
+        # rdtclient resolves torrents through Real-Debrid. A torrent stuck waiting for that
+        # for an hour means rdtclient itself needs restarting. Opt-in: a restart interrupts
+        # every download, and only restart-service may touch Docker.
+        "rdt_stuck": {
+            "enabled": False,
+            "stuck_after_minutes": 60,
+            "recheck_after_minutes": 5,
+            "cooldown_minutes": 60,
+        },
     },
     "cleanup": {
         "interval_minutes": 5,
@@ -70,7 +79,13 @@ DEFAULT_CONFIG = {
         "notify_on_error": True,
     },
     "state": {"prune_days": 7, "max_history": 200, "max_runs": 100},
+    # The token is never written here. It comes from RESTART_SERVICE_TOKEN; see restart_token().
+    "restart_service": {"url": "http://restart-service:8080", "token": ""},
 }
+
+
+def restart_token():
+    return os.getenv("RESTART_SERVICE_TOKEN", "")
 
 
 def _merge(base, override):
@@ -156,6 +171,10 @@ def _apply_env(config):
         if os.getenv(variable):
             stalled[key] = int(os.environ[variable])
 
+    restart = config["restart_service"]
+    restart["url"] = _env("RESTART_SERVICE_URL", restart["url"])
+    restart["token"] = restart_token()
+
     cleanup = config["cleanup"]
     if os.getenv("CLEANUP_INTERVAL_MINUTES"):
         cleanup["interval_minutes"] = int(os.environ["CLEANUP_INTERVAL_MINUTES"])
@@ -218,6 +237,14 @@ def normalise(raw):
     if not isinstance(limit, int) or limit < 1:
         errors.append("Import-pending limit must be a whole number, at least 1")
 
+    rdt = config["detectors"]["rdt_stuck"]
+    if not isinstance(rdt.get("stuck_after_minutes"), int) or rdt["stuck_after_minutes"] < 1:
+        errors.append("rdtclient stuck time must be a whole number of minutes, at least 1")
+    if not isinstance(rdt.get("recheck_after_minutes"), int) or rdt["recheck_after_minutes"] < 1:
+        errors.append("rdtclient recheck delay must be a whole number of minutes, at least 1")
+    if not isinstance(rdt.get("cooldown_minutes"), int) or rdt["cooldown_minutes"] < 0:
+        errors.append("rdtclient cooldown must be a whole number of minutes, or 0")
+
     return config, errors
 
 
@@ -226,6 +253,9 @@ def save_config(config, path="config.json"):
     directory = os.path.dirname(path)
     if directory:
         os.makedirs(directory, exist_ok=True)
+
+    # The restart-service token belongs in the environment, not in a file that gets copied around.
+    config = {**config, "restart_service": {k: v for k, v in config.get("restart_service", {}).items() if k != "token"}}
 
     temp = f"{path}.tmp"
     with open(temp, "w") as handle:
