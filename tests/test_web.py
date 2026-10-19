@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 
 import pytest
 
@@ -266,3 +267,37 @@ def test_current_persistent_log_can_be_downloaded(client, tmp_path, monkeypatch)
     response = client.get("/logs/current")
     assert response.status_code == 200
     assert response.data == path.read_bytes()
+
+
+def test_run_now_uses_the_configured_dry_run_setting(client, runtime, monkeypatch):
+    # Run now must not override cleanup.dry_run; only the Dry run button forces a dry run.
+    calls = []
+    done = threading.Event()
+
+    def fake_run_once(force_stuck=False, dry_run=None):
+        calls.append(dry_run)
+        done.set()
+        return [], []
+
+    runtime.run_once = fake_run_once
+    runtime.config["cleanup"]["dry_run"] = True
+
+    assert client.post("/run").status_code == 302
+    assert done.wait(5)
+    assert calls == [None]
+
+
+def test_dry_run_button_forces_a_dry_run(client, runtime):
+    calls = []
+    done = threading.Event()
+
+    def fake_run_once(force_stuck=False, dry_run=None):
+        calls.append(dry_run)
+        done.set()
+        return [], []
+
+    runtime.run_once = fake_run_once
+
+    client.post("/run", data={"dry_run": "1"})
+    assert done.wait(5)
+    assert calls == [True]

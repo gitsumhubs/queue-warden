@@ -173,7 +173,9 @@ def create_app(runtime):
         # Backgrounded so the button returns immediately; a full pass can take a while when
         # several targets are slow to answer.
         force = request.form.get("force_stuck") == "1"
-        dry = request.form.get("dry_run") == "1"
+        # None, not False, when the form does not ask for a dry run: False would override
+        # cleanup.dry_run in the config and make "Run now" remove things for real.
+        dry = True if request.form.get("dry_run") == "1" else None
         threading.Thread(target=runtime.run_once, kwargs={"force_stuck": force, "dry_run": dry}, daemon=True).start()
         return redirect("/")
 
