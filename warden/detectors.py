@@ -223,10 +223,18 @@ def detect_failed_imports(target, records, settings):
 
         if state in bad_states or status in bad_states:
             reason = record.get("state") or record.get("status") or "failed"
+            # The state alone does not say why the *arr gave up, so carry the tracked status and
+            # its first message too, the same way the import-pending reason does.
+            detail = f"{target.name} state: {reason}"
+            if record.get("tracked_status"):
+                detail += f" ({record['tracked_status']})"
+            messages = record.get("messages") or []
+            if messages:
+                detail += f" — {messages[0][:160]}"
             victims.append(
                 Victim(
                     record["title"],
-                    f"{target.name} state: {reason}",
+                    detail,
                     "failed_import",
                     "failed_import",
                     record.get("download_id"),

@@ -94,6 +94,18 @@ def test_failed_import_matches_tracked_state():
     assert victims[0].queue_id == 1
 
 
+def test_failed_import_reason_says_why_the_arr_blocked_it():
+    # The state alone is not enough to act on; the tracked status and the *arr's own message are.
+    records = [{
+        "id": 6, "download_id": "fff", "title": "Blocked Show", "state": "importblocked", "status": "warning",
+        "tracked_status": "warning", "messages": ["Episode has a TBA title"],
+    }]
+
+    victims = detectors.detect_failed_imports(FakeTarget(), records, IMPORT_SETTINGS)
+
+    assert victims[0].reason == "Sonarr state: importblocked (warning) — Episode has a TBA title"
+
+
 def test_failed_import_matches_status_when_state_is_empty():
     # Some queue entries carry the verdict on status rather than trackedDownloadState.
     records = [{"id": 3, "download_id": "ccc", "title": "Failed Item", "state": "", "status": "failed"}]
